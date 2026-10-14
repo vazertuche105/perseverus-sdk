@@ -567,6 +567,8 @@ impl SpendClient {
             timings.reserve(spend_items.len());
         }
 
+        let mut proof_cache: std::collections::HashMap<u64, (Vec<PoseidonField>, Vec<bool>)> =
+            std::collections::HashMap::new();
         let mut prepared: Vec<PreparedSpend> = Vec::with_capacity(spend_items.len());
         for (i, &(issued, spend_idx, input)) in spend_items.iter().enumerate() {
             let t_proof = std::time::Instant::now();
@@ -580,8 +582,18 @@ impl SpendClient {
             let query = blind(input, rng)
                 .map_err(|e| SpendClientError::Proof(format!("blind query: {}", e)))?;
 
-            // Fetch non-inclusion proof for this pack
-            let (smt_siblings, smt_path_bits) = self.fetch_revocation_proof(issued.pack_id)?;
+            // Non-inclusion proof: fetched once per PACK, not once per spend.
+            // Every fetch puts the pack_id on the wire next to this batch, so
+            // repeating it per token would tell the server how many tokens of
+            // that pack this batch spends.
+            let (smt_siblings, smt_path_bits) = match proof_cache.get(&issued.pack_id) {
+                Some(p) => p.clone(),
+                None => {
+                    let p = self.fetch_revocation_proof(issued.pack_id)?;
+                    proof_cache.insert(issued.pack_id, p.clone());
+                    p
+                }
+            };
 
             let spend_idx_f = CircuitField::from(spend_idx as u64);
             let pack_id_f = CircuitField::from(issued.pack_id);

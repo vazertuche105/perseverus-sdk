@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace --release
+      - name: Generate Kotlin bindings
+        shell: bash
+        run: |
+          cargo build -p perseverus-sdk --release --lib
+          LIB=target/release/libperseverus_sdk.so
+          [ "$RUNNER_OS" = "macOS" ] && LIB=target/release/libperseverus_sdk.dylib
+          cargo run -q -p perseverus-sdk --features bindgen --bin uniffi-bindgen -- \
+            generate --library "$LIB" --language kotlin --out-dir sdk/bindings/kotlin
+          test -s sdk/bindings/kotlin/com/btcmedusa/perseverus/perseverus_sdk.kt

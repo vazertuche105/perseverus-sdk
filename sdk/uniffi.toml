@@ -1,0 +1,3 @@
+[bindings.kotlin]
+package_name = "com.btcmedusa.perseverus"
+cdylib_name = "perseverus_sdk"

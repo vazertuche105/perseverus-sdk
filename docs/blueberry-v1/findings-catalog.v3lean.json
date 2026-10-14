@@ -1,0 +1,461 @@
+{
+  "catalog_version": 1,
+  "tag_format": "v3-lean (24-bit)",
+  "source": "Ported verbatim from sparrow-fork V3LeanReportBuilder.java; findings are emitted in this order.",
+  "fields": {
+    "version": [
+      0,
+      1
+    ],
+    "grade": [
+      1,
+      2
+    ],
+    "is_coinjoin": [
+      3,
+      1
+    ],
+    "is_peel_chain": [
+      4,
+      1
+    ],
+    "cioh": [
+      5,
+      1
+    ],
+    "address_reuse_io": [
+      6,
+      1
+    ],
+    "deterministic_cap": [
+      7,
+      1
+    ],
+    "dust_class": [
+      8,
+      2
+    ],
+    "consolidation_class": [
+      10,
+      2
+    ],
+    "entity_class": [
+      12,
+      2
+    ],
+    "multisig_escrow": [
+      14,
+      1
+    ],
+    "chain_taint": [
+      15,
+      1
+    ],
+    "entropy_class": [
+      16,
+      2
+    ],
+    "script_mixed": [
+      18,
+      1
+    ],
+    "op_return": [
+      19,
+      1
+    ],
+    "rbf_signaled": [
+      20,
+      1
+    ],
+    "no_locktime": [
+      21,
+      1
+    ],
+    "legacy_version": [
+      22,
+      1
+    ],
+    "anon_set_none": [
+      23,
+      1
+    ]
+  },
+  "enums": {
+    "grade": [
+      "A+/A/B",
+      "C",
+      "D",
+      "F"
+    ],
+    "dust_class": [
+      "none",
+      "dust-outputs",
+      "dust-spending",
+      "dust-attack"
+    ],
+    "consolidation_class": [
+      "none",
+      "fan-in",
+      "fan-out",
+      "cross-or-other"
+    ],
+    "entity_class": [
+      "none",
+      "known-entity",
+      "darknet",
+      "ofac-or-sanctioned"
+    ],
+    "entropy_class": [
+      "normal",
+      "low",
+      "zero",
+      "zero-sweep"
+    ]
+  },
+  "display_grade": {
+    "0": "B",
+    "1": "C",
+    "2": "D",
+    "3": "F"
+  },
+  "synthetic_score": {
+    "0": 85,
+    "1": 75,
+    "2": 65,
+    "3": 45,
+    "3_deterministic_cap": 30
+  },
+  "primary_recommendation_cascade": [
+    {
+      "when": "deterministic_cap || address_reuse_io",
+      "urgency": "immediate",
+      "headline": "Your wallet sends change back to the input address",
+      "detail": "Switch to a wallet that generates fresh change addresses for every transaction. This is a critical privacy failure - the change output is 100% identifiable."
+    },
+    {
+      "when": "entity_class == 3",
+      "urgency": "immediate",
+      "headline": "Sanctioned-entity exposure",
+      "detail": "These coins carry strong forensic association. Avoid linking them to any KYC identity."
+    },
+    {
+      "when": "entity_class == 2",
+      "urgency": "immediate",
+      "headline": "Darknet-market-linked entity",
+      "detail": "These coins carry strong forensic association. Avoid linking them to any KYC identity."
+    },
+    {
+      "when": "dust_class >= 2",
+      "urgency": "immediate",
+      "headline": "Dust attack or dust co-spend detected",
+      "detail": "Mark the dust UTXOs as do-not-spend in coin control and never co-spend them with real funds."
+    },
+    {
+      "when": "consolidation_class != 0",
+      "urgency": "soon",
+      "headline": "UTXO consolidation links your history",
+      "detail": "Pre-mix through CoinJoin before consolidating, or avoid consolidation."
+    },
+    {
+      "when": "chain_taint",
+      "urgency": "soon",
+      "headline": "Cluster / taint signals in ancestry",
+      "detail": "Investigate this UTXO's history on your own node before spending."
+    },
+    {
+      "when": "is_peel_chain",
+      "urgency": "soon",
+      "headline": "Part of a peel chain",
+      "detail": "Insert a CoinJoin between spends or rotate to a fresh wallet."
+    },
+    {
+      "when": "cioh",
+      "urgency": "soon",
+      "headline": "Common-input-ownership clustering",
+      "detail": "Avoid combining UTXOs from different sources in one transaction."
+    },
+    {
+      "when": "entity_class == 1",
+      "urgency": "when-convenient",
+      "headline": "Known entity involved in this transaction",
+      "detail": "Assume this counterparty can link the transaction to your KYC identity."
+    },
+    {
+      "when": "multisig_escrow",
+      "urgency": "when-convenient",
+      "headline": "Multisig / escrow product detected",
+      "detail": "This product is identifiable on-chain."
+    },
+    {
+      "when": "is_coinjoin",
+      "urgency": "positive",
+      "headline": "CoinJoin participation - privacy protected",
+      "detail": "Good - this transaction breaks deterministic links."
+    },
+    {
+      "when": "true",
+      "urgency": "when-convenient",
+      "headline": "No significant privacy issues",
+      "detail": "No critical or high-severity findings for this transaction."
+    }
+  ],
+  "findings": [
+    {
+      "id": "compound-deterministic-cap",
+      "title": "Deterministic privacy failure - score capped",
+      "severity": "critical",
+      "confidence": "deterministic confidence",
+      "description": "A 100% certain privacy leak was detected. The score is capped at F because no amount of positive signals can offset a deterministic identification.",
+      "recommendation": "Fix the deterministic issue before addressing other findings.",
+      "when": "deterministic_cap"
+    },
+    {
+      "id": "h2-same-address-io",
+      "title": "Same address in input and output - change revealed",
+      "severity": "critical",
+      "confidence": "deterministic confidence",
+      "description": "One of the spendable outputs goes back to an address that was also an input. This is a 100% deterministic link - that output is certainly change, revealing which other outputs are payments and the exact payment amount.",
+      "recommendation": "Use a wallet that generates a new change address for every transaction (HD wallets). Never send change back to the same address.",
+      "when": "address_reuse_io"
+    },
+    {
+      "id": "alarm-toxic-merge",
+      "title": "Chain taint / toxic merge in ancestry",
+      "severity": "critical",
+      "confidence": "high confidence",
+      "description": "This transaction's ancestry includes a privacy-fatal merge or cross-cluster link. The damage is on-chain and irreversible.",
+      "recommendation": "Avoid spending these UTXOs in ways that further extend the linkage. Run a backward trace on your own node for detail.",
+      "when": "chain_taint"
+    },
+    {
+      "id": "entity-ofac-match",
+      "title": "Sanctions / OFAC entity match",
+      "severity": "critical",
+      "confidence": "high confidence",
+      "description": "An address in this transaction matches a sanctions / OFAC list.",
+      "recommendation": "Treat these coins as toxic; consult compliance guidance before transacting.",
+      "when": "entity_class == 3"
+    },
+    {
+      "id": "entity-behavior-darknet",
+      "title": "Darknet-market-linked entity detected",
+      "severity": "critical",
+      "confidence": "high confidence",
+      "description": "An address in this transaction is associated with a darknet market or compromised mixer.",
+      "recommendation": "These coins carry strong forensic association; avoid linking them to KYC identities.",
+      "when": "entity_class == 2"
+    },
+    {
+      "id": "dust-attack",
+      "title": "Dust attack or dust co-spend detected",
+      "severity": "critical",
+      "confidence": "high confidence",
+      "description": "This transaction co-spends dust with other coins, which confirms common ownership to an attacker who planted the dust.",
+      "recommendation": "Mark dust UTXOs as do-not-spend in coin control; never co-spend them with real funds.",
+      "when": "dust_class >= 2"
+    },
+    {
+      "id": "consolidation",
+      "title": "Consolidation pattern ({consolidation_class})",
+      "severity": "critical",
+      "confidence": "high confidence",
+      "description": "Multiple UTXOs were combined, collapsing separate histories into one cluster that chain analysis treats as a single wallet.",
+      "recommendation": "Pre-mix through CoinJoin before consolidating, or avoid consolidation entirely.",
+      "when": "consolidation_class != 0"
+    },
+    {
+      "id": "h3-cioh",
+      "title": "Common input ownership heuristic fires",
+      "severity": "high",
+      "confidence": "high confidence",
+      "description": "Multiple inputs were spent together; standard chain analysis treats them all as one wallet.",
+      "recommendation": "Use CoinJoin or avoid combining UTXOs from different sources in one transaction.",
+      "when": "cioh"
+    },
+    {
+      "id": "peel-chain",
+      "title": "Peel chain detected (2+ consecutive hops)",
+      "severity": "high",
+      "confidence": "medium confidence",
+      "description": "This transaction is part of a peel chain - a sequence of transactions each with one input and two outputs, where one output feeds the next. The pattern is highly identifiable and links every downstream UTXO into one wallet's spending behaviour.",
+      "recommendation": "Insert a CoinJoin between spends, or rotate to a fresh wallet.",
+      "when": "is_peel_chain"
+    },
+    {
+      "id": "h17-multisig",
+      "title": "Multisig / escrow product detected",
+      "severity": "high",
+      "confidence": "medium confidence",
+      "description": "The script structure reveals participation in a known escrow / multisig product.",
+      "recommendation": "Be aware that this product is identifiable on-chain.",
+      "when": "multisig_escrow"
+    },
+    {
+      "id": "dust-outputs",
+      "title": "Dust outputs present",
+      "severity": "high",
+      "confidence": "medium confidence",
+      "description": "This transaction has outputs below the dust threshold, which can act as tracking beacons.",
+      "recommendation": "Mark dust UTXOs as do-not-spend in coin control.",
+      "when": "dust_class == 1"
+    },
+    {
+      "id": "entity-behavior-exchange",
+      "title": "Known entity involved",
+      "severity": "high",
+      "confidence": "medium confidence",
+      "description": "An exchange, gambling site, or other identified service is involved in this transaction.",
+      "recommendation": "Assume this counterparty can link the transaction to any KYC identity it holds for you.",
+      "when": "entity_class == 1"
+    },
+    {
+      "id": "h5-low-entropy",
+      "title": "Very low transaction entropy",
+      "severity": "medium",
+      "confidence": "medium confidence",
+      "description": "The transaction has near-zero entropy: there is essentially one valid interpretation of which inputs fund which outputs.",
+      "recommendation": "Use transactions with more balanced amounts / multiple participants (CoinJoin).",
+      "when": "entropy_class >= 2"
+    },
+    {
+      "id": "h5-low-entropy",
+      "title": "Low transaction entropy",
+      "severity": "medium",
+      "confidence": "low confidence",
+      "description": "The input/output mapping is largely determinable from the amounts.",
+      "recommendation": "Prefer amounts that don't trivially reveal the change output.",
+      "when": "entropy_class == 1"
+    },
+    {
+      "id": "h7-op-return",
+      "title": "OP_RETURN metadata present",
+      "severity": "medium",
+      "confidence": "medium confidence",
+      "description": "This transaction embeds OP_RETURN data, which can carry protocol metadata that aids identification.",
+      "recommendation": "Avoid attaching data payments to private spends.",
+      "when": "op_return"
+    },
+    {
+      "id": "h11-wallet-fingerprint",
+      "title": "{count} wallet fingerprinting signal(s)",
+      "severity": "low",
+      "confidence": "low confidence",
+      "description": "Wallet-specific transaction construction signals (nSequence / nLockTime / nVersion) narrow down which wallet software created this transaction.",
+      "recommendation": "Different wallet software exposes different fingerprints; this is informational.",
+      "when": "rbf_signaled || no_locktime || legacy_version"
+    },
+    {
+      "id": "h6-rbf",
+      "title": "RBF signaled",
+      "severity": "low",
+      "confidence": "low confidence",
+      "description": "nSequence indicates this transaction opted into Replace-By-Fee.",
+      "recommendation": "Informational - common and not directly de-anonymising.",
+      "when": "rbf_signaled"
+    },
+    {
+      "id": "h11-no-locktime",
+      "title": "No anti-fee-sniping (nLockTime = 0)",
+      "severity": "low",
+      "confidence": "low confidence",
+      "description": "nLockTime is 0, so the transaction does not use anti-fee-sniping. Some wallets always set a recent locktime.",
+      "recommendation": "Informational - reveals wallet construction style.",
+      "when": "no_locktime"
+    },
+    {
+      "id": "h11-legacy-version",
+      "title": "Legacy transaction version (< 2)",
+      "severity": "low",
+      "confidence": "low confidence",
+      "description": "The transaction version is below 2, a wallet-fingerprinting signal.",
+      "recommendation": "Informational.",
+      "when": "legacy_version"
+    },
+    {
+      "id": "anon-set-none",
+      "title": "No anonymity set",
+      "severity": "low",
+      "confidence": "low confidence",
+      "description": "All output amounts are unique, so there is no ambiguity set hiding the payment among equal-value outputs.",
+      "recommendation": "Equal-value outputs (as in CoinJoin) provide an anonymity set.",
+      "when": "anon_set_none"
+    },
+    {
+      "id": "script-uniform",
+      "title": "Uniform script types",
+      "severity": "good",
+      "confidence": "good",
+      "description": "All inputs and outputs use the same script type, avoiding the script-type change fingerprint.",
+      "recommendation": "Good - keep using a single address type per transaction where possible.",
+      "when": "!script_mixed"
+    },
+    {
+      "id": "h4-coinjoin",
+      "title": "CoinJoin participation",
+      "severity": "good",
+      "confidence": "good",
+      "description": "This transaction participates in a CoinJoin, breaking deterministic input-output links.",
+      "recommendation": "Good - CoinJoin is privacy-positive.",
+      "when": "is_coinjoin"
+    }
+  ],
+  "ungraded": {
+    "grade": "—",
+    "profile": "ungraded",
+    "recommendation": {
+      "urgency": "neutral",
+      "headline": "No privacy grade for this UTXO",
+      "detail": "This transaction is intentionally excluded from privacy grading. It is not a KYC flag — it simply isn't assessed. A transaction is skipped when it matches any of the rules below."
+    },
+    "rules": [
+      {
+        "id": "skip-dust-total",
+        "title": "Transaction value under 2,000 sats",
+        "severity": "info",
+        "confidence": "rule",
+        "description": "The whole transaction that created this output sends less than 2,000 satoshis in total. Very-low-value transactions are not assessed.",
+        "recommendation": "No action needed — this is not a privacy risk."
+      },
+      {
+        "id": "skip-dust-output",
+        "title": "Dust outputs only",
+        "severity": "info",
+        "confidence": "rule",
+        "description": "Every output in the transaction is below the 546-sat network dust limit.",
+        "recommendation": "No action needed."
+      },
+      {
+        "id": "skip-op-return",
+        "title": "Data carrier (OP_RETURN only)",
+        "severity": "info",
+        "confidence": "rule",
+        "description": "The transaction carries only embedded data and no spendable payment output.",
+        "recommendation": "No action needed."
+      },
+      {
+        "id": "skip-ordinal",
+        "title": "Ordinal inscription",
+        "severity": "info",
+        "confidence": "rule",
+        "description": "The transaction is an ordinal inscription (witness-embedded content), not a standard payment.",
+        "recommendation": "No action needed."
+      },
+      {
+        "id": "skip-runes",
+        "title": "Runes transfer",
+        "severity": "info",
+        "confidence": "rule",
+        "description": "The transaction is a Runes protocol message rather than a standard payment.",
+        "recommendation": "No action needed."
+      },
+      {
+        "id": "skip-asset",
+        "title": "Counterparty / Omni asset transfer",
+        "severity": "info",
+        "confidence": "rule",
+        "description": "The transaction is a Counterparty or Omni Layer asset transfer rather than a standard bitcoin payment.",
+        "recommendation": "No action needed."
+      }
+    ]
+  }
+}

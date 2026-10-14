@@ -1,0 +1,44 @@
+[package]
+name = "perseverus-client-native"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+# rlib lets us pull the issuance client into integration tests + other
+# workspace crates; cdylib is for the future JNI surface.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+perseverus-core = { path = "../core" }
+
+# HTTP + serde are needed for the native IssuanceClient — the wallet
+# needs to call the server's /issue endpoint synchronously from JNI.
+# `blocking` avoids forcing the caller to set up tokio from Java.
+reqwest = { workspace = true, features = ["blocking", "json", "socks"] }
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+rand.workspace = true
+ark-ed-on-bn254.workspace = true
+ark-bn254.workspace = true
+ark-ec.workspace = true
+ark-ff.workspace = true
+ark-serialize.workspace = true
+ark-crypto-primitives = { workspace = true, features = ["sponge"] }
+ark-groth16.workspace = true
+ark-snark.workspace = true
+ark-relations.workspace = true
+perseverus-circuits = { path = "../circuits" }
+thiserror.workspace = true
+
+# JNI surface for Sparrow. Optional — enable with `--features jni`.
+jni = { version = "0.21", optional = true }
+
+[features]
+default = []
+# Compiles the `jni_surface` module and exports `Java_*` symbols from
+# the cdylib. Kept behind a feature flag so plain `cargo build` on
+# machines without a JDK still works (the `jni` crate only links libjvm
+# at runtime, but pulling it in optionally keeps the default build
+# lean).
+jni = ["dep:jni"]

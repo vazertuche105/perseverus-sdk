@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://btcmedusa.com/schemas/v1/privacy-report.schema.json",
+  "title": "PrivacyReport",
+  "description": "Per-input privacy assessment returned by the Perseverus SDK (analyze_inputs). Mirrors the Sparrow fork's PrivacyReport so every wallet renders the same model. Produced client-side: the server never sees it. Field names are snake_case to match the /v1 wire format; the Kotlin bindings expose camelCase.",
+  "type": "object",
+  "required": ["schema_version", "status", "input", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "status": {
+      "description": "graded: tag decrypted and decoded. ungraded: the funding tx is intentionally excluded by the filter build-side skip rules (dust / OP_RETURN / ordinal / runes / Counterparty) — not a privacy flag, no token spent. not_covered: no filter exists yet for the funding block height — not assessed, no token spent. error: the assessment failed (see error).",
+      "enum": ["graded", "ungraded", "not_covered", "error"]
+    },
+    "input": { "$ref": "#/$defs/InputRef" },
+    "grade": {
+      "description": "Display grade. v3-lean tags carry a 4-way band, so values are B (band A+/A/B), C, D, F. Richer tiers may emit A+ or A. Absent unless status = graded.",
+      "enum": ["A+", "A", "B", "C", "D", "F"]
+    },
+    "grade_band": {
+      "description": "The raw 4-way band from the tag, for UIs that prefer it to the display grade.",
+      "enum": ["A+/A/B", "C", "D", "F"]
+    },
+    "score": {
+      "description": "0-100. With v3-lean tags this is SYNTHESIZED per band (85/75/65/45, or 30 when the deterministic cap is set) so the number never contradicts the letter. score_is_exact tells the UI whether to show it as an exact figure.",
+      "type": "integer", "minimum": 0, "maximum": 100
+    },
+    "score_is_exact": { "type": "boolean" },
+    "profile": {
+      "description": "Transaction profile, e.g. peel-chain, coinjoin, transaction, ungraded.",
+      "type": "string"
+    },
+    "primary_recommendation": { "$ref": "#/$defs/Recommendation" },
+    "findings": {
+      "description": "Ordered most severe first. For status = ungraded this lists the skip rules as info findings; for not_covered and error it is empty.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/Finding" }
+    },
+    "severity_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "high":     { "type": "integer", "minimum": 0 },
+        "medium":   { "type": "integer", "minimum": 0 },
+        "low":      { "type": "integer", "minimum": 0 },
+        "info":     { "type": "integer", "minimum": 0 },
+        "good":     { "type": "integer", "minimum": 0 }
+      }
+    },
+    "include_in_wallet_average": {
+      "description": "False for ungraded / not_covered / error so these never drag down an aggregate score.",
+      "type": "boolean"
+    },
+    "raw_tag": {
+      "description": "Debug only: decoded tag as 'V3LEAN:<6 hex>', the same string the Sparrow JNI layer returns.",
+      "type": "string",
+      "pattern": "^V3LEAN:[0-9a-f]{6}$"
+    },
+    "token_spent": {
+      "description": "Whether producing this report consumed a token. Inputs sharing a funding tx share one token: v5 filters are keyed per transaction.",
+      "type": "boolean"
+    },
+    "error": { "$ref": "#/$defs/Error" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "graded" } } },
+      "then": { "required": ["grade", "grade_band", "score", "score_is_exact", "primary_recommendation", "severity_counts", "include_in_wallet_average", "token_spent"] }
+    },
+    {
+      "if": { "properties": { "status": { "const": "error" } } },
+      "then": { "required": ["error"] }
+    }
+  ],
+  "$defs": {
+    "InputRef": {
+      "type": "object",
+      "required": ["txid", "vout"],
+      "additionalProperties": false,
+      "properties": {
+        "txid": { "description": "Funding txid, display (RPC) byte order.", "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "vout": { "type": "integer", "minimum": 0 },
+        "block_height": { "description": "Height of the funding tx's block; supplied by the wallet's own header/SPV store.", "type": "integer", "minimum": 0 },
+        "value_sats": { "type": "integer", "minimum": 0 },
+        "funding_tx_inputs": { "type": "integer", "minimum": 0 },
+        "funding_tx_outputs": { "type": "integer", "minimum": 0 },
+        "funding_tx_fee_sats": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Recommendation": {
+      "type": "object",
+      "required": ["urgency", "headline", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "urgency": { "enum": ["immediate", "soon", "when-convenient", "positive", "neutral"] },
+        "headline": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    },
+    "Finding": {
+      "type": "object",
+      "required": ["id", "title", "severity", "confidence", "description", "recommendation"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "description": "Stable am-i-exposed finding id, e.g. h3-cioh. See findings-catalog.v3lean.json.", "type": "string" },
+        "title": { "type": "string" },
+        "severity": { "enum": ["critical", "high", "medium", "low", "info", "good"] },
+        "confidence": { "type": "string" },
+        "description": { "type": "string" },
+        "recommendation": { "type": "string" }
+      }
+    },
+    "Error": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" }
+      }
+    }
+  }
+}

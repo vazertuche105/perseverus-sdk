@@ -26,3 +26,28 @@ jobs:
           cargo run -q -p perseverus-sdk --features bindgen --bin uniffi-bindgen -- \
             generate --library "$LIB" --language kotlin --out-dir sdk/bindings/kotlin
           test -s sdk/bindings/kotlin/com/btcmedusa/perseverus/perseverus_sdk.kt
+
+  # We don't publish mobile binaries; these jobs prove the integrator build
+  # scripts in scripts/ (documented in docs/08-building.md) keep working.
+  android:
+    name: android build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-ndk --locked
+      - name: Build
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        run: scripts/build-android.sh
+
+  ios:
+    name: ios build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: scripts/build-ios.sh

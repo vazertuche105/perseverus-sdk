@@ -6,7 +6,9 @@ Client SDK for **BTC Medusa / Perseverus**. A Bitcoin wallet uses it to learn ho
 - **`client-native/`**: wallet-side protocol client (token issuance, Groth16 spend, private query, Tor transport).
 - **`circuits/`**: the Groth16 spend circuit, also published for audit at [btc-medusa-circuit](https://github.com/vazertuche105/btc-medusa-circuit).
 - **`core/`**: shared cryptographic primitives (OPRF on Baby Jubjub/BN254, DLEQ, Poseidon, Sparse Merkle Tree, filter formats).
-- **`docs/blueberry-v1/`**: integration contract: `/v1` OpenAPI draft, `PrivacyReport` JSON schema, findings catalog.
+- **`docs/`**: **developer documentation, start at [`docs/README.md`](docs/README.md)**: how it works, quickstart, SDK reference, integration guides, report field guide, HTTP `/v1` reference, privacy model, mobile builds, troubleshooting.
+- **`docs/blueberry-v1/`**: the machine-readable contract: `/v1` OpenAPI, `PrivacyReport` JSON schema, findings catalog.
+- **`scripts/`**: `build-android.sh` and `build-ios.sh` for integrators (exercised by CI).
 
 The server is not part of this repository. Point the SDK at a running Perseverus server.
 
@@ -15,6 +17,6 @@ cargo test --workspace
 cd sdk/examples/kotlin-jvm && ./gradlew run --args="status"   # needs JDK 17+
 ```
 
-New contributors: read **`HANDOFF.md`** first.
+Integrating a wallet: read **[`docs/README.md`](docs/README.md)**. Working on the SDK itself: read **`HANDOFF.md`** first.
 
 © Perseverus Privacy Solutions. All rights reserved; patent pending. No license is granted unless the owner states one.

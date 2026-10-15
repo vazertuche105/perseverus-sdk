@@ -57,7 +57,10 @@ bitcoin = { version = "0.32", features = ["serde"] }
 # Async / HTTP
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
-reqwest = { version = "0.12", features = ["json"] }
+# No TLS by default: production is plain HTTP inside a Tor onion service
+# (end-to-end encrypted by Tor), and leaving TLS out keeps OpenSSL out of
+# Android/iOS builds. Enable the SDK's `rustls` feature for https endpoints.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 futures = "0.3"
 
 # Error handling

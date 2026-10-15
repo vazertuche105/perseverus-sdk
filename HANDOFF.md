@@ -8,7 +8,7 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 
 1. The server publishes one encrypted filter per block. Each transaction's findings are compressed to a 24-bit **v3-lean tag**, encrypted under a key that only an **OPRF** evaluation (Baby Jubjub over BN254) can recover.
 2. The wallet downloads filters for its real blocks mixed with **Laplace decoys**, and matches its transaction locally.
-3. To decrypt a match, the wallet spends one **anonymous token**. Tokens are blind-signed in packs, so a purchase can't be linked to a query, and each one is spent with a **Groth16 proof** carrying a nullifier, so one query can't be linked to another.
+3. To decrypt a match, the wallet spends one **anonymous token**. Tokens are blind-signed in packs, so a purchase can't be linked to a query, and each one is spent with a **Groth16 proof** carrying a nullifier, so a query reveals nothing about which token or purchase paid for it (spends from one pack are currently linkable to each other; see `docs/07-privacy-model.md`).
 
 **Goal:** an SDK that BlueWallet's privacy wallet **Blueberry** ([Kotlin Multiplatform](https://github.com/BlueWallet/Blueberry.kmp)) can call to check a transaction's inputs before broadcast. Tokens are spent per funding transaction.
 
@@ -35,14 +35,9 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 
 1. ~~Verify `analyze` on a real coin.~~ Done 2026-10-14: real mainnet coin against production, grade D (peel chain), 1 token, 3.3 s.
 2. ~~Server `/v1` API, then switch the SDK to `/v1`.~~ Done 2026-10-14. The server serves `/v1` (contract: `docs/blueberry-v1/openapi.yaml`) and the SDK uses only `/v1`. The card yearly plan (13 packs) is supported.
-3. **Developer documentation** in `docs/`, written for a wallet developer who has never seen this project:
-   - **SDK guide:** every function and type, with what it does, *why* it exists (including the privacy reason), when to call it, a Kotlin example, its errors and how to handle them, and what the server can and can't see.
-   - **5-minute quickstart** and walkthroughs: buying tokens, pre-broadcast analysis, showing ungraded / not-covered / error results.
-   - **`PrivacyReport` field guide:** every grade, status and finding explained.
-   - **HTTP `/v1` reference:** each endpoint's purpose, request and response with real examples, and errors (the server's tests record real exchanges with `V1_EXAMPLES_DIR`).
-   - **Privacy and threat model** in plain language, plus troubleshooting.
-   - **Build instructions for integrators:** how to compile the SDK for Android (`cargo-ndk`) and iOS (XCFramework via `uniffi-bindgen --language swift`). Integrators build and ship the native library themselves; we don't publish binaries.
-4. **SDK features:** BTC silent-payment purchase, a redeem retry that survives an app restart (persist the prepared blinded packs), a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
+3. ~~**Developer documentation**~~ Done 2026-10-15: `docs/README.md` onward (how it works, quickstart, SDK reference, integration guides, report field guide, HTTP `/v1` reference with recorded examples, privacy model, Android/iOS build scripts in `scripts/` run by CI, troubleshooting). Keep it in step with any API change.
+4. **Privacy fix:** stop sending `pack_id` (revocation proof fetch) on the spend circuit; see `docs/07-privacy-model.md` known limitation 1. Probably needs a server endpoint for the whole revocation list.
+5. **SDK features:** BTC silent-payment purchase, a redeem retry that survives an app restart (persist the prepared blinded packs), a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
 
 **Open questions for BlueWallet:** inputs as a PSBT or as outpoints plus heights (the SDK takes outpoints plus heights today); decoy default and bandwidth budget; which block range must have filters; payment methods at launch; how the SDK is licensed and published.
 

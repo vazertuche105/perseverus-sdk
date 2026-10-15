@@ -20,6 +20,8 @@ required-features = ["bindgen"]
 [features]
 default = []
 bindgen = ["uniffi/cli"]
+# https endpoints (pure-Rust TLS, no OpenSSL). Not needed for the .onion service.
+rustls = ["reqwest/rustls-tls", "perseverus-client-native/rustls"]
 
 [dependencies]
 perseverus-core = { path = "../core" }

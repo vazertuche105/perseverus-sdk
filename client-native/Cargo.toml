@@ -36,6 +36,7 @@ jni = { version = "0.21", optional = true }
 
 [features]
 default = []
+rustls = ["reqwest/rustls-tls"]
 # Compiles the `jni_surface` module and exports `Java_*` symbols from
 # the cdylib. Kept behind a feature flag so plain `cargo build` on
 # machines without a JDK still works (the `jni` crate only links libjvm

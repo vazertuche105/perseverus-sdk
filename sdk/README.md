@@ -11,7 +11,7 @@ The wallet SDK for BTC Medusa. It lets a wallet buy anonymous token packs and th
 | `addPurchase(id, plan)` | Records a purchase made outside the SDK (e.g. a card checkout finished in a browser) so it can be redeemed. |
 | `purchaseStatus(id)` → `PENDING`/`PAID`/`REDEEMED`/`EXPIRED` | Polls `GET /v1/tokens/purchase/{id}/status`. |
 | `redeem(id)` → `List<PackInfo>` | Blinds tokens, gets them signed via `POST /v1/tokens/redeem` and unblinds them. One pack for most plans; a yearly card plan returns 13 (this month plus the next 12). The claim goes out on its own Tor circuit. |
-| `tokenBalance()` / `listPacks()` | Local only. The server never learns balances. |
+| `tokenBalance()` / `listPacks()` | Computed on the device; the server never learns balances. They fetch the current month (`GET /v1/meta`) to decide which packs are active. |
 | `importPack(blob, method)` | Adds a pack blob in Sparrow's format, e.g. migrated from Sparrow or restored from a backup. |
 | `analyzeInputs(inputs, AnalyzeOptions)` → `AnalysisResult` | The pre-broadcast call. Returns one `PrivacyReport` per input. |
 
@@ -57,7 +57,9 @@ The generated bindings (`com.btcmedusa.perseverus`, about 3k lines) are gitignor
 
 ## Not done yet
 
-- Card yearly plan (13 packs), BTC silent-payment purchase, and a progress callback for the UI.
-- Fetching revocation proofs once per pack instead of once per spend. Today each spend repeats its `pack_id` on the wire; this needs a `client-native` change.
-- Native builds for Android (`cargo-ndk`) and iOS (XCFramework), and Maven publishing.
-- The Kotlin/JVM sample (`examples/kotlin-jvm`) compiles against the generated bindings but has not yet been run end to end on a real machine.
+- BTC silent-payment purchase through the SDK (the server endpoint exists: `btc_code` on `/v1/tokens/redeem`).
+- Revocation proofs are fetched on the same circuit as the spend, so spends from one pack are linkable to each other (not to what was checked). See `docs/07-privacy-model.md`, known limitations.
+- A progress callback for the UI, and async variants.
+- Redeem retries survive a dropped connection within one call (Idempotency-Key), but not an app restart mid-redeem.
+
+Full developer documentation is in [`../docs/`](../docs/README.md).

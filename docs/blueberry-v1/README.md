@@ -1,6 +1,6 @@
-# Blueberry integration — M0 contract (draft 1)
+# Blueberry integration: `/v1` contract
 
-Step 2 of the handoff plan (B.12): a draft `/v1` contract for the Blueberry SDK, written against the **local working tree** of `perseverus` and `sparrow-fork`, not GitHub. GitHub is ~5 months and about 4.4k lines behind.
+The machine-readable contract behind the SDK: the `/v1` OpenAPI spec, the `PrivacyReport` schema and the findings catalog. The server implements it (2026-10-14) and the SDK uses it. **For human-readable documentation start at [`../README.md`](../README.md).** The notes further down are the original design record.
 
 | File | What it is |
 |---|---|

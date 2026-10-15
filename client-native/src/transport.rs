@@ -10,11 +10,16 @@
 //!     (`socks5h://`) so `.onion` addresses resolve correctly. The Tor
 //!     daemon is managed externally (by the Java layer or the OS); this
 //!     module only needs the SOCKS5 address.
-//!   - **OHTTP** — Oblivious HTTP relay. The relay URL is stored but
-//!     transport-layer OHTTP is not yet fully wired at the reqwest layer.
-//!   - **Auto** — cascading fallback: Tor → OHTTP → Direct. Tries each
-//!     transport in order of privacy strength. The wallet should default
-//!     to this mode so that privacy is preserved even when Tor is down.
+//!   - **OHTTP** — Oblivious HTTP relay. Not implemented yet: building a
+//!     client in this mode returns an error rather than a clearnet client.
+//!   - **Auto** — kept for compatibility with stored settings; it means
+//!     **Tor, failing closed**. It used to fall back to Direct when Tor
+//!     looked unreachable, which silently exposed the user's IP (and the
+//!     "is Tor up?" probe misread unrelated SOCKS errors as "Tor is down").
+//!     Nothing ever falls back to clearnet now: if Tor is down, requests fail.
+//!
+//! Until `configure` is called the mode is Tor on the default SOCKS port, so
+//! a caller that forgets to configure fails closed instead of going direct.
 //!
 //! ## Independence from Sparrow's Tor
 //!
@@ -58,10 +63,8 @@ pub enum TransportMode {
     /// Oblivious HTTP relay (placeholder — not yet implemented at the
     /// transport layer).
     Ohttp { relay_url: String },
-    /// Cascading fallback: Tor → OHTTP → Direct. Tries Tor first; if
-    /// the SOCKS5 proxy is unreachable, falls back to OHTTP; if no relay
-    /// URL was configured or the relay is down, falls back to Direct.
-    /// This is the recommended default for production wallets.
+    /// Same as `Tor` (fails closed). Kept so stored "AUTO" settings still
+    /// load; the relay URL is ignored until OHTTP exists.
     Auto {
         socks_url: String,
         ohttp_relay_url: Option<String>,
@@ -69,8 +72,9 @@ pub enum TransportMode {
 }
 
 impl Default for TransportMode {
+    /// Tor on the default port: an unconfigured caller fails closed.
     fn default() -> Self {
-        TransportMode::Direct
+        TransportMode::Tor { socks_url: DEFAULT_TOR_SOCKS.to_string() }
     }
 }
 
@@ -223,86 +227,39 @@ fn build_client_single(
         .map_err(|e| format!("failed to build HTTP client: {}", e))
 }
 
-/// Cascading fallback: Tor → OHTTP → Direct.
-///
-/// Tries to build a Tor client and sends a lightweight probe request
-/// to confirm the SOCKS5 proxy is reachable. If Tor is down, falls
-/// back to OHTTP (if a relay URL was configured), then to Direct as
-/// a last resort.
-///
-/// The probe is a TCP-level connect check — it doesn't send any
-/// application data, so it's fast (~100ms) and privacy-safe.
+/// Auto mode: Tor only, failing closed. There is deliberately no fallback
+/// to OHTTP (not implemented) or Direct (exposes the user's IP). If Tor is
+/// down, requests fail with "error connecting to socks proxy".
 fn build_client_auto(
     socks_url: &str,
-    ohttp_relay_url: Option<&str>,
+    _ohttp_relay_url: Option<&str>,
     timeout: Duration,
 ) -> Result<Client, String> {
-    // 1. Try Tor
-    let tor_mode = TransportMode::Tor { socks_url: socks_url.to_string() };
-    match build_client_single(&tor_mode, timeout) {
-        Ok(client) => {
-            // Quick probe: try to connect through the SOCKS5 proxy.
-            // We use a short timeout so we don't block for long if Tor is down.
-            let probe_timeout = Duration::from_secs(3);
-            let probe_client = Client::builder()
-                .timeout(probe_timeout)
-                .proxy(Proxy::all(socks_url).map_err(|e| format!("proxy: {}", e))?)
-                .build()
-                .map_err(|e| format!("probe client: {}", e))?;
+    build_client_single(&TransportMode::Tor { socks_url: socks_url.to_string() }, timeout)
+}
 
-            // Try connecting to a known Tor endpoint. If the SOCKS5
-            // proxy itself is down, this fails immediately.
-            match probe_client.get("http://127.0.0.1:9050").send() {
-                // Any response (even an error page) means the proxy is alive.
-                // A connection-refused from the *proxy* throws an Err, which
-                // is what we're checking for.
-                Ok(_) => {
-                    crate::debug_log!("[transport] Auto: using Tor (SOCKS5 proxy reachable)");
-                    return Ok(client);
-                }
-                Err(e) => {
-                    // Check if the error is a proxy/connect error (Tor down)
-                    // vs. a target-unreachable error (Tor up, target down).
-                    let err_str = format!("{}", e);
-                    if err_str.contains("connection refused")
-                        || err_str.contains("Connection refused")
-                        || err_str.contains("proxy")
-                        || err_str.contains("SOCKS")
-                        || err_str.contains("socks")
-                    {
-                        crate::debug_log!("[transport] Auto: Tor SOCKS5 proxy unreachable, falling back");
-                    } else {
-                        // Proxy is up but target is unreachable — Tor is working.
-                        crate::debug_log!("[transport] Auto: using Tor (proxy alive, probe target unreachable is OK)");
-                        return Ok(client);
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            crate::debug_log!("[transport] Auto: failed to build Tor client: {}", e);
-        }
-    }
-
-    // 2. Try OHTTP
-    if let Some(relay) = ohttp_relay_url {
-        let ohttp_mode = TransportMode::Ohttp { relay_url: relay.to_string() };
-        match build_client_single(&ohttp_mode, timeout) {
-            Ok(client) => {
-                crate::debug_log!("[transport] Auto: falling back to OHTTP relay ({})", relay);
-                return Ok(client);
-            }
-            Err(e) => {
-                crate::debug_log!("[transport] Auto: OHTTP also failed: {}", e);
-            }
-        }
+/// When a request failed in Tor mode, say whether Tor itself is the problem.
+/// Checks locally whether anything accepts connections on the SOCKS port
+/// (no data is sent). Returns `None` outside Tor mode.
+pub fn tor_hint() -> Option<String> {
+    let socks_url = match &*state().read().ok()? {
+        TransportMode::Tor { socks_url } | TransportMode::Auto { socks_url, .. } => socks_url.clone(),
+        _ => return None,
+    };
+    let after_scheme = socks_url.split("://").last().unwrap_or(&socks_url);
+    let host_port = after_scheme.rsplit('@').next().unwrap_or(after_scheme).to_string();
+    use std::net::ToSocketAddrs;
+    let listening = host_port
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut a| a.next())
+        .map(|addr| std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok())
+        .unwrap_or(false);
+    Some(if listening {
+        format!("Tor is running ({host_port}) but the BTC Medusa server couldn't be reached through it; try again shortly")
     } else {
-        crate::debug_log!("[transport] Auto: no OHTTP relay configured, skipping");
-    }
-
-    // 3. Last resort: Direct
-    crate::debug_log!("[transport] Auto: all privacy transports failed — falling back to DIRECT (no IP privacy!)");
-    build_client_single(&TransportMode::Direct, timeout)
+        format!("Tor isn't running at {host_port}. Start Tor and try again; BTC Medusa only connects through Tor")
+    })
 }
 
 /// Perform a simple HTTP GET through the current transport and return
@@ -464,9 +421,9 @@ mod tests {
     /// to avoid data races from `cargo test`'s parallel test threads.
     #[test]
     fn transport_configure_modes() {
-        // 1. Fresh state defaults to Direct.
+        // 1. Fresh state defaults to Tor (fails closed), never Direct.
         let mode = current_mode().unwrap();
-        assert!(matches!(mode, TransportMode::Direct));
+        assert!(matches!(mode, TransportMode::Tor { ref socks_url } if socks_url == DEFAULT_TOR_SOCKS));
 
         // 2. Tor with default socks
         configure("TOR", None).unwrap();
@@ -530,7 +487,7 @@ mod tests {
             _ => panic!("expected Auto mode"),
         }
 
-        // 10. Auto build_client works (will fall through to Direct since no Tor running in CI)
+        // 10. Auto builds a (Tor) client; it never falls back to Direct (see tests/fails_closed.rs)
         let client = build_client(Duration::from_secs(5));
         assert!(client.is_ok());
 

@@ -103,7 +103,14 @@ const EXCEPTION_CLASS: &str = "com/sparrowwallet/perseverus/PerseverusException"
 fn throw(env: &mut JNIEnv, msg: impl AsRef<str>) {
     // If throwing itself fails we can't do anything useful — just log
     // and drop. The JVM will notice pending-exception state on return.
-    let _ = env.throw_new(EXCEPTION_CLASS, msg.as_ref());
+    let mut msg = msg.as_ref().to_string();
+    // A failed connection in Tor mode: say whether Tor is the problem.
+    if msg.contains("error sending request") || msg.contains("error connecting") {
+        if let Some(hint) = crate::transport::tor_hint() {
+            msg = format!("{hint} ({msg})");
+        }
+    }
+    let _ = env.throw_new(EXCEPTION_CLASS, msg);
 }
 
 /// Wrap a JNI entry point in `catch_unwind` so a Rust panic becomes a

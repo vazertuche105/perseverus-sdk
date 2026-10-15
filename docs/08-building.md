@@ -2,7 +2,7 @@
 
 The SDK is a Rust library. Your app ships it as a native library plus generated bindings: Kotlin for Android and JVM, Swift for iOS. **Perseverus doesn't publish prebuilt binaries.** You build them from this repository, at a commit you choose, with the scripts below. The repository's CI runs the same scripts on every push, so they're kept working.
 
-The library is pure Rust with no C dependencies and no TLS library. Production traffic is plain HTTP inside the Tor onion service, which Tor encrypts end to end. The only native toolchains you need are the Android NDK (for its linker) or Xcode.
+The library has no OpenSSL dependency. Production traffic is plain HTTP inside the Tor onion service, which Tor encrypts end to end. The HTTP client is built with `rustls` (pure-Rust TLS, on by default) because its SOCKS support, which Tor needs, only works with a TLS backend compiled in. The only native toolchains you need are the Android NDK or Xcode.
 
 ## Common prerequisites
 
@@ -87,13 +87,9 @@ cargo run -p perseverus-sdk --features bindgen --bin uniffi-bindgen -- \
 
 On macOS the library is `libperseverus_sdk.dylib`. Put it on `jna.library.path` and use `net.java.dev.jna:jna:5.17.0`. `sdk/examples/kotlin-jvm` does all of this through Gradle.
 
-## Optional: https endpoints
+## https endpoints
 
-If you ever point the SDK at an `https://` server, for example your own proxy, build with the `rustls` feature to get pure-Rust TLS (still no OpenSSL):
-
-```bash
-cargo ndk ... build --release -p perseverus-sdk --lib --features rustls
-```
+`rustls` is on by default, so `https://` servers work too. Don't build with `--no-default-features`: without a TLS backend the HTTP client can't use a SOCKS proxy, and every request over Tor fails with `error connecting to socks proxy`.
 
 ## Updating
 

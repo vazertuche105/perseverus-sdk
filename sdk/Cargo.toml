@@ -18,9 +18,10 @@ path = "uniffi-bindgen.rs"
 required-features = ["bindgen"]
 
 [features]
-default = []
+default = ["rustls"]
 bindgen = ["uniffi/cli"]
-# https endpoints (pure-Rust TLS, no OpenSSL). Not needed for the .onion service.
+# Pure-Rust TLS (no OpenSSL). On by default: besides https endpoints, reqwest
+# only routes through a SOCKS proxy (Tor) when a TLS backend is compiled in.
 rustls = ["reqwest/rustls-tls", "perseverus-client-native/rustls"]
 
 [dependencies]

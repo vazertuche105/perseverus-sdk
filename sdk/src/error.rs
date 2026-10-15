@@ -52,9 +52,26 @@ impl From<reqwest::Error> for PerseverusError {
     fn from(e: reqwest::Error) -> Self {
         match e.status() {
             Some(s) => Self::Server { status: s.as_u16(), reason: e.to_string() },
-            None => Self::network(e),
+            None => Self::network(error_chain(&e)),
         }
     }
+}
+
+/// An error and all its causes, `outer: inner: …`, so a failure like
+/// "error sending request" also says *why* (e.g. "error connecting to socks
+/// proxy"). Causes never include request bodies.
+pub(crate) fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut cur = e.source();
+    while let Some(c) = cur {
+        let m = c.to_string();
+        if !out.contains(&m) {
+            out.push_str(": ");
+            out.push_str(&m);
+        }
+        cur = c.source();
+    }
+    out
 }
 
 impl From<perseverus_client_native::QueryClientError> for PerseverusError {

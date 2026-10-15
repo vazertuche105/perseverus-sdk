@@ -7,6 +7,7 @@ Find the message you're seeing. In Kotlin, `e.message` prints as `reason=…` or
 | You see | Cause | Fix |
 |---|---|---|
 | `Network`: `… error sending request …`, `connection refused`, `proxy` | Tor isn't running, or isn't at the SOCKS address you gave. | Start Tor or wait until it reports ready. Check `socksProxy`; the default is `socks5h://127.0.0.1:9050`. On desktop, test with `curl --socks5-hostname 127.0.0.1:9050 http://medusayl5…had.onion/v1/meta`. |
+| `Network`: `… error connecting to socks proxy: … failed to create underlying connection` | Nothing is listening at the SOCKS address (Tor not running, or on another port such as Tor Browser's 9150), or the SDK was built with `--no-default-features`. | Start Tor (`brew services start tor`) and test it with the `curl` above. Rebuild with default features. |
 | `Network`: timeouts, or slow first call | Building a new Tor circuit to an onion service takes a few seconds, sometimes more on mobile. | Retry. The first call after Tor starts is often the slowest. |
 | `InvalidArgument`: `Transport.Direct is only allowed for a server on this machine…` | `Transport.Direct` with a remote server (production, or a dev server on another host). | Use `Transport.Tor` with the `.onion` endpoint. `Direct` is only for a server on `localhost`. |
 | `Verification`: `server pubkey … does not match pinned …` | You're talking to a different server, or the pinned key has a typo. | Check `endpoint` and the key (`dc03c12d…560b`). **Don't** turn off pinning to make it go away. |

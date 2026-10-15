@@ -42,7 +42,11 @@ val generateBindings by tasks.registering(Exec::class) {
     description = "Generates Kotlin bindings from the compiled library with uniffi-bindgen."
     dependsOn(cargoBuild)
     workingDir(repoRoot)
+    // Regenerate whenever the compiled library changes; without this input
+    // Gradle treats old bindings as up to date after an SDK API change.
+    inputs.file(libDir.resolve(libName))
     outputs.dir(bindingsDir)
+    doFirst { bindingsDir.deleteRecursively() }
     commandLine(
         cargo, "run", "-q", "-p", "perseverus-sdk", "--features", "bindgen", "--bin", "uniffi-bindgen", "--",
         "generate", "--library", libDir.resolve(libName).path, "--language", "kotlin", "--out-dir", bindingsDir.path,

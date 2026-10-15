@@ -1,51 +1,55 @@
 openapi: 3.1.0
 info:
   title: Perseverus (BTC Medusa) API
-  version: 1.0.0-draft.1
+  version: 1.0.0
   summary: Private, token-gated Bitcoin privacy analysis for wallets.
   description: |
-    Stable `/v1` façade over the existing Perseverus server handlers, written for
-    third-party wallets (first consumer: BlueWallet's Blueberry). The intended
-    client is the `perseverus-sdk` crate (UniFFI → Kotlin/Swift). Most wallets
-    should never call these endpoints by hand: the crypto (OPRF blinding, Groth16
-    proving, DLEQ verification, tag decryption) lives in the SDK.
+    The stable `/v1` interface of a Perseverus server. Wallets use it to buy
+    anonymous tokens and to learn the privacy exposure of their coins
+    **without telling the server which coins they are asking about**.
 
-    ## Privacy invariants (non-negotiable)
-    * There is **no** "get the tag for txid X" endpoint, and there never will be.
-      The wallet downloads encrypted filters for real and decoy heights and matches
-      locally. The server sees heights (real mixed with decoys), never txids.
-    * `POST /v1/filters/batch` and `POST /v1/analyze/batch` MUST be sent as
-      separate requests, and over separate Tor circuits in production. The
-      analyze request carries no heights, so the server cannot join a spend batch
-      to its decoy set.
-    * `POST /v1/board/publish` MUST go over a circuit isolated from the redeem call.
-    * Token balances are never sent to the server. They live in the wallet's local
-      pack blobs.
+    Most integrators should use the `perseverus-sdk` library (Rust core with
+    Kotlin/Swift bindings) instead of calling these endpoints directly: the
+    cryptography (OPRF blinding, Groth16 proofs, DLEQ verification, tag
+    decryption) lives in the SDK. This document is the contract the SDK is
+    built on, and the reference for anyone writing their own client.
+
+    ## Privacy invariants
+    * There is **no** endpoint that takes a txid or outpoint, and there never
+      will be. Clients download encrypted filters for real and decoy block
+      heights and match locally; the server sees heights, never transactions.
+    * `POST /v1/filters/batch` and `POST /v1/analyze/batch` must be separate
+      requests, over separate Tor circuits in production. The analyze request
+      carries no heights, so the server cannot join a spend batch to its decoys.
+    * `POST /v1/board/publish` must use a circuit isolated from the redeem call.
+    * Token balances never leave the client.
 
     ## Conventions
-    * JSON, `snake_case`. Binary values are lowercase hex. Curve points are
-      compressed Baby Jubjub (ark-serialize, 32 bytes). Field elements are
-      canonical little-endian BN254 Fr (32 bytes).
-    * Months are `YYYYMM` integers (e.g. `202610`).
-    * Every non-2xx response uses the `Error` envelope.
-    * `Idempotency-Key` is accepted on every POST that creates or consumes something.
-    * Base URLs: clearnet for development, the `.onion` service for production.
+    * JSON in `snake_case`. Binary values are lowercase hex. Curve points are
+      compressed Baby Jubjub (32 bytes); field elements are BN254 Fr,
+      canonical little-endian (32 bytes). Months are `YYYYMM` integers.
+    * Every error, including malformed JSON and unknown routes, uses the
+      `Error` envelope with a stable `code`.
+    * `Idempotency-Key` is honoured on purchase, redeem and analyze.
   license:
-    name: MIT
+    name: All rights reserved
 servers:
   - url: http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion
     description: Production (Tor hidden service). Route over Tor (socks5h).
   - url: http://178.105.65.132:3030
-    description: Development (clearnet). Never use for real user data.
+    description: Production over clearnet (development use; the server sees your IP).
 
 tags:
   - name: meta
+    description: What the server is and what it supports.
   - name: tokens
-    description: Purchase and redeem anonymous token packs.
+    description: Buy anonymous token packs and redeem them.
   - name: analyze
-    description: Private, token-gated tag decryption.
+    description: Spend tokens to decrypt privacy tags.
   - name: filters
+    description: Encrypted per-block filters and the tag codebook.
   - name: circuit
+    description: Groth16 keys for the spend proof.
   - name: revocation
   - name: board
 
@@ -54,22 +58,29 @@ paths:
     get:
       tags: [meta]
       operationId: getMeta
-      summary: Server parameters the SDK pins and checks for drift.
-      description: Replaces `/server/pubkey`, `/epoch` and `/health`. Cacheable for a short time; `current_month` changes at month rollover.
+      summary: Server parameters, limits and capabilities.
+      description: |
+        Call at startup. Pin `server_pubkey_hex` on first use and refuse a
+        server that later presents a different key. Use `current_month` as the
+        spend proof's `current_month`. `circuit.pk_sha256` is `null` when the
+        server doesn't serve the proving key (production): ship `pk.bin` with
+        the app instead.
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Meta' }
-        default: { $ref: '#/components/responses/Error' }
 
   /v1/codebook:
     get:
       tags: [filters]
       operationId: getCodebook
-      summary: Global v5 tag codebook (PSCB). Public, non-secret.
-      description: The SDK downloads it once per `codebook_id` and checks it against every v5 filter's `codebook_id` before decoding. Wraps `GET /codebook`.
+      summary: Global tag codebook (PSCB format). Public, non-secret.
+      description: |
+        A decrypted filter entry is an index into this table, which maps it to
+        a 24-bit privacy tag. Download once per `codebook_id` and check it
+        against each filter's `codebook_id` before decoding.
       parameters:
         - $ref: '#/components/parameters/IfNoneMatch'
       responses:
@@ -80,14 +91,18 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Codebook' }
-        '304': { description: Not modified }
-        default: { $ref: '#/components/responses/Error' }
+        '304': { description: Not modified (If-None-Match matched). }
+        '404': { $ref: '#/components/responses/Error' }
 
   /v1/circuit/pk:
     get:
       tags: [circuit]
       operationId: getProvingKey
-      summary: Groth16 proving key (~4 MB). Cache it and pin its SHA-256 from /v1/meta.
+      summary: Groth16 proving key (~4 MB), if the server serves it.
+      description: |
+        Production does **not** serve the proving key (404 with guidance):
+        wallets ship `pk.bin` inside the app, so a malicious server can't swap
+        it. Development servers may serve it.
       parameters:
         - $ref: '#/components/parameters/IfNoneMatch'
       responses:
@@ -98,37 +113,47 @@ paths:
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
-        '304': { description: Not modified }
-        default: { $ref: '#/components/responses/Error' }
+        '304': { description: Not modified. }
+        '404': { $ref: '#/components/responses/Error' }
 
   /v1/circuit/vk:
     get:
       tags: [circuit]
       operationId: getVerifyingKey
       summary: Groth16 verifying key.
+      parameters:
+        - $ref: '#/components/parameters/IfNoneMatch'
       responses:
         '200':
           description: Compressed ark-serialize VerifyingKey<Bn254>.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
-        default: { $ref: '#/components/responses/Error' }
+        '304': { description: Not modified. }
+        '404': { $ref: '#/components/responses/Error' }
 
   /v1/tokens/purchase:
     post:
       tags: [tokens]
       operationId: createPurchase
-      summary: Start a token purchase. Returns a handle the wallet's own UI drives.
+      summary: Start a token purchase.
       description: |
-        * `lightning` wraps `POST /ln/invoice` and returns a BOLT11.
-        * `card` wraps `POST /stripe/checkout` and returns a Checkout URL. The
-          server, not the client, now mints the purchase id.
-        * `btc` (BIP-352 silent payment) is issued by the separate SP scanner
-          service (`POST /subscribe`), which returns a `psbtc1.…` code. Folding it
-          into this endpoint is an open M0 question; until then `btc` returns 501.
+        One flow for every payment method: create a purchase, show the user
+        how to pay, poll its status, then redeem it with the same
+        `purchase_id`.
 
-        `purchase_id` is a bearer credential. Anyone holding it can claim the
-        pack once it is paid, so keep it in the wallet's secure storage.
+        * `lightning`: plans `trial` (1 token) or `onetime` (100). The server
+          prices the invoice at the live BTC/USD rate.
+        * `card` (Stripe): plans `onetime` or `monthly` (1 pack) and `yearly`
+          (13 monthly packs). Open `payment.checkout_url` in a browser.
+        * `btc` (silent payment) is issued by a separate payment scanner;
+          this endpoint returns `501`. Redeem the scanner's `psbtc1…` code
+          with `POST /v1/tokens/redeem {btc_code}`.
+
+        `purchase_id` is a **bearer credential**: whoever holds it can redeem
+        the paid pack. Store it in the wallet's secure storage.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -136,26 +161,39 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/PurchaseRequest' }
+            examples:
+              lightning:
+                value: { method: lightning, plan: onetime }
+              card_yearly:
+                value: { method: card, plan: yearly }
       responses:
         '201':
           description: Purchase created.
+          headers:
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Purchase' }
+        '400': { $ref: '#/components/responses/Error' }
         '402': { $ref: '#/components/responses/Error' }
         '501': { $ref: '#/components/responses/Error' }
-        default: { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
 
   /v1/tokens/purchase/{purchase_id}/status:
     get:
       tags: [tokens]
       operationId: getPurchaseStatus
-      summary: Poll payment state. Wraps /ln/status/{nonce} and /stripe/status/{nonce}.
+      summary: Poll a purchase until it is paid.
+      description: |
+        Poll every few seconds while the user pays. `paid` means it's ready
+        to redeem. Lightning purchases report `redeemed` afterwards; card
+        purchases return `404` once redeemed.
       parameters:
         - name: purchase_id
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, pattern: '^(ln|card)_[0-9a-f]+$' }
       responses:
         '200':
           description: OK
@@ -163,22 +201,29 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PurchaseStatus' }
         '404': { $ref: '#/components/responses/Error' }
-        default: { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
 
   /v1/tokens/redeem:
     post:
       tags: [tokens]
       operationId: redeemTokens
-      summary: Exchange a paid credential + blinded tokens for blind-signed pack(s).
+      summary: Exchange a paid purchase for blind-signed token packs.
       description: |
-        Unified redeem. Wraps `/ln/claim`, `/stripe/redeem`, `/stripe/redeem-batch`
-        and `/btc/redeem`. The blinded points go in the same request that consumes
-        the credential, so payment and pack are linked only by this single,
-        single-use call. After this, spends cannot be linked to the payment.
+        Send the blinded tokens together with the paid credential: a
+        `purchase_id` (Lightning or card) or a `btc_code`. The server signs
+        the blinded points without seeing the tokens. This single call is the
+        only link between the payment and the pack; afterwards, spends cannot
+        be linked to the payment.
 
-        Before drawing each `pack_id` the SDK must read `GET /v1/board/slots` and
-        re-roll any id whose revocation slot is taken (the board enforces this
-        with 409 on publish).
+        One pack per purchase, except card `yearly` (up to 13). The request is
+        fully validated before the credential is used up, so a malformed
+        request never burns a paid purchase. Use an `Idempotency-Key`: if the
+        connection drops after the server signed, retrying with the same key
+        returns the same packs.
+
+        Before choosing each `pack_id`, read `GET /v1/board/slots` and re-roll
+        any id whose revocation slot is taken.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -189,39 +234,38 @@ paths:
       responses:
         '200':
           description: One signed pack per requested pack, in request order.
+          headers:
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RedeemResponse' }
         '400': { $ref: '#/components/responses/Error' }
         '402': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-        default: { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
 
   /v1/board/slots:
     get:
       tags: [board]
       operationId: getBoardSlots
-      summary: Occupied 16-bit revocation slots. Read before drawing a pack_id.
+      summary: Occupied 16-bit revocation slots.
+      description: Read before choosing a `pack_id`; re-roll ids whose slot is taken.
       responses:
         '200':
           description: OK
           content:
             application/json:
-              schema:
-                type: object
-                required: [slots]
-                properties:
-                  slots:
-                    type: array
-                    items: { type: integer, minimum: 0, maximum: 65535 }
-        default: { $ref: '#/components/responses/Error' }
+              schema: { $ref: '#/components/schemas/BoardSlots' }
 
   /v1/board/publish:
     post:
       tags: [board]
       operationId: publishBoardEntry
-      summary: Publish a pack's attribution entry. Send over an ISOLATED circuit.
+      summary: Publish a card pack's attribution entry (chargeback handling).
+      description: Card packs only. Send over a Tor circuit isolated from the redeem call.
       requestBody:
         required: true
         content:
@@ -233,36 +277,32 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BoardPublishResponse' }
+        '400': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
-        default: { $ref: '#/components/responses/Error' }
 
   /v1/revocation/root:
     get:
       tags: [revocation]
       operationId: getRevocationRoot
+      summary: Current revocation tree root (a public input of every spend proof).
       responses:
         '200':
           description: OK
           content:
             application/json:
-              schema:
-                type: object
-                required: [revocation_root_hex]
-                properties:
-                  revocation_root_hex: { $ref: '#/components/schemas/FieldHex' }
-        default: { $ref: '#/components/responses/Error' }
+              schema: { $ref: '#/components/schemas/RevocationRoot' }
 
   /v1/revocation/proof/{pack_id}:
     get:
       tags: [revocation]
       operationId: getRevocationProof
-      summary: SMT non-inclusion proof for a pack.
+      summary: Proof that a pack is not revoked.
       description: |
-        Leaks which pack is about to be spent, though not which query it funds.
-        Fetch it once per pack, not once per spend, and cache it until the
-        revocation root changes. Unauthenticated whole-tree download is an open
-        hardening item.
+        Needed to build spend proofs. It reveals which pack is about to be
+        used (not which query it funds), so fetch it once per pack and cache
+        it until the revocation root changes. `is_included: true` means the
+        pack was revoked and its tokens can't be spent.
       parameters:
         - name: pack_id
           in: path
@@ -274,33 +314,23 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RevocationProof' }
-        default: { $ref: '#/components/responses/Error' }
+        '400': { $ref: '#/components/responses/Error' }
 
   /v1/filters/batch:
     post:
       tags: [filters]
       operationId: getFiltersBatch
-      summary: Encrypted per-block filters for real + decoy heights.
+      summary: Encrypted per-block filters for real and decoy heights.
       description: |
-        Serves only pre-built filters. Heights with no filter come back in
-        `missing` and are never built on demand. The SDK reports inputs whose
-        funding height is missing as `not_covered` and spends no token on them.
-
-        The SDK MUST shuffle real and Laplace-decoy heights together, and SHOULD
-        pad the request to a fixed size bucket.
+        Mix the real heights with decoys and shuffle them; the server can't
+        tell which are real. Heights without a filter come back in `missing`
+        (never built on demand); treat those inputs as *not covered* and spend
+        no token on them. `/v1/meta` lists the covered ranges.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [heights]
-              properties:
-                heights:
-                  type: array
-                  minItems: 1
-                  maxItems: 200
-                  items: { type: integer, minimum: 0 }
+            schema: { $ref: '#/components/schemas/FilterBatchRequest' }
       responses:
         '200':
           description: OK
@@ -308,26 +338,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/FilterBatch' }
         '400': { $ref: '#/components/responses/Error' }
-        default: { $ref: '#/components/responses/Error' }
 
   /v1/analyze/batch:
     post:
       tags: [analyze]
       operationId: analyzeBatch
-      summary: Spend N tokens for N blinded OPRF evaluations in one round trip.
+      summary: Spend tokens for blinded OPRF evaluations, one per matched transaction.
       description: |
-        The pre-broadcast call. Wraps `POST /oprf/evaluate/batch`. Each entry
-        carries one blinded point H2C(funding_txid)·ρ plus a Groth16 spend proof.
-        The server verifies each proof, burns its nullifier, and returns β with a
-        DLEQ proof. Entries succeed or fail independently.
+        Each entry carries one blinded point (the funding txid, hashed to the
+        curve and blinded) and a Groth16 proof that spends one unspent,
+        unrevoked, unexpired token. The server checks the proof, burns its
+        nullifier, and returns the evaluated point with a DLEQ proof. The
+        client verifies the DLEQ proof, unblinds, and decrypts the tag.
 
-        **Units:** v5 filters are keyed per *transaction*, so the SDK spends one
-        token per **distinct funding txid that matched locally**. It spends
-        nothing for inputs that are ungraded (txid absent from a present filter)
-        or not_covered (filter missing). Several inputs from the same funding tx
-        cost one token.
-
-        The request contains no heights, txids or outpoints.
+        Entries succeed or fail independently. A failed entry's token was not
+        burned, **except** `nullifier_spent` (that token was already used).
+        Spend one token per distinct funding transaction that matched a
+        filter locally; never for ungraded or not-covered inputs. The request
+        contains no heights, txids or outpoints.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -337,12 +365,14 @@ paths:
             schema: { $ref: '#/components/schemas/AnalyzeBatchRequest' }
       responses:
         '200':
-          description: One entry per request entry, in order.
+          description: One result per request entry, in order.
+          headers:
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AnalyzeBatchResponse' }
         '400': { $ref: '#/components/responses/Error' }
-        default: { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
 
 components:
   parameters:
@@ -350,18 +380,27 @@ components:
       name: Idempotency-Key
       in: header
       required: false
-      description: Client-generated UUIDv4. Replays within 24h return the original response.
-      schema: { type: string, format: uuid }
+      description: |
+        1–128 characters, unique per logical operation (a UUID is ideal).
+        Retrying with the same key and body returns the stored response
+        (`Idempotent-Replayed: true`); the same key with a different body is
+        refused with `422 idempotency_key_reused`. Keys are kept for 24 h in
+        server memory and forgotten on restart. 5xx responses are not stored.
+      schema: { type: string, minLength: 1, maxLength: 128 }
     IfNoneMatch:
       name: If-None-Match
       in: header
       required: false
+      description: The ETag from a previous response; matching returns 304.
       schema: { type: string }
 
   headers:
     ETag:
-      description: Content hash; equals the matching *_sha256 value in /v1/meta.
+      description: Quoted SHA-256 of the content.
       schema: { type: string }
+    IdempotentReplayed:
+      description: '`true` when this response was replayed for a repeated Idempotency-Key.'
+      schema: { type: string, enum: ['true'] }
 
   responses:
     Error:
@@ -375,90 +414,95 @@ components:
       type: string
       pattern: '^([0-9a-f]{2})*$'
     PointHex:
-      description: Compressed Baby Jubjub point, 32 bytes hex.
+      description: Compressed Baby Jubjub point, 32 bytes.
       type: string
       pattern: '^[0-9a-f]{64}$'
     FieldHex:
-      description: BN254 Fr element, canonical LE, 32 bytes hex.
+      description: BN254 Fr element, canonical little-endian, 32 bytes.
       type: string
       pattern: '^[0-9a-f]{64}$'
 
+    ErrorDetail:
+      type: object
+      required: [code, message, retryable]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable code. New codes may be added; treat unknown codes as `internal`.
+          enum:
+            - bad_request
+            - batch_too_large
+            - payment_required
+            - underpaid
+            - credential_invalid
+            - credential_expired
+            - credential_used
+            - proof_invalid
+            - revocation_root_mismatch
+            - nullifier_spent
+            - slot_taken
+            - forbidden
+            - conflict
+            - not_found
+            - not_configured
+            - not_implemented
+            - upstream_unavailable
+            - idempotency_key_reused
+            - internal
+        message: { type: string, description: Human-readable detail. Don't parse it. }
+        retryable: { type: boolean, description: True when the same request may succeed later. }
     Error:
       type: object
       required: [error]
+      additionalProperties: false
       properties:
-        error:
-          type: object
-          required: [code, message, retryable]
-          properties:
-            code:
-              type: string
-              description: Stable machine-readable code.
-              enum:
-                - bad_request
-                - batch_too_large
-                - payment_required
-                - underpaid
-                - credential_invalid
-                - credential_expired
-                - credential_used
-                - proof_invalid
-                - revocation_root_mismatch
-                - nullifier_spent
-                - pack_revoked
-                - token_expired
-                - slot_taken
-                - not_found
-                - not_configured
-                - not_implemented
-                - rate_limited
-                - internal
-            message: { type: string }
-            retryable: { type: boolean }
-            retry_after_secs: { type: integer, minimum: 0 }
+        error: { $ref: '#/components/schemas/ErrorDetail' }
 
     Meta:
       type: object
-      required: [api_version, server_pubkey_hex, current_month, circuit, filters, min_client_version, payment_methods]
+      required: [api_version, min_client_version, server_pubkey_hex, current_month, test_clock, circuit, filters, limits, payment_methods]
+      additionalProperties: false
       properties:
         api_version: { type: string, example: '1.0.0' }
-        server_pubkey_hex:
-          $ref: '#/components/schemas/PointHex'
-        current_month:
-          type: integer
-          description: YYYYMM. Use as the spend circuit's current_month.
-          example: 202610
-        test_clock: { type: boolean, description: True only on sandbox servers. }
+        min_client_version: { type: string, example: '0.1.0' }
+        server_pubkey_hex: { $ref: '#/components/schemas/PointHex' }
+        current_month: { type: integer, example: 202610 }
+        test_clock: { type: boolean, description: True only on test servers with a simulated clock. }
         circuit:
           type: object
           required: [version, pk_sha256, vk_sha256]
+          additionalProperties: false
           properties:
-            version: { type: string, example: 'v10' }
-            pk_sha256: { $ref: '#/components/schemas/Hex' }
-            vk_sha256: { $ref: '#/components/schemas/Hex' }
+            version: { type: string, example: v10 }
+            pk_sha256: { type: [string, 'null'], pattern: '^[0-9a-f]{64}$' }
+            vk_sha256: { type: [string, 'null'], pattern: '^[0-9a-f]{64}$' }
         filters:
           type: object
-          required: [format_version, codebook_id, tag_format]
+          required: [format_version, tag_format, codebook_id, covered_ranges]
+          additionalProperties: false
           properties:
-            format_version: { type: integer, enum: [3, 5] }
-            codebook_id: { type: string, pattern: '^[0-9a-f]{8}$' }
-            tag_format: { type: string, enum: ['v3-lean'] }
+            format_version: { type: integer, enum: [5] }
+            tag_format: { type: string, enum: [v3-lean] }
+            codebook_id: { type: [string, 'null'], pattern: '^[0-9a-f]{8}$' }
             covered_ranges:
-              description: Height ranges with pre-built filters, for setting UI expectations.
               type: array
               items:
                 type: object
                 required: [from, to]
+                additionalProperties: false
                 properties:
                   from: { type: integer }
                   to: { type: integer }
         limits:
           type: object
+          required: [max_filters_per_batch, max_spends_per_batch, max_tokens_per_pack, max_packs_per_redeem]
+          additionalProperties: false
           properties:
             max_filters_per_batch: { type: integer, example: 200 }
             max_spends_per_batch: { type: integer, example: 64 }
             max_tokens_per_pack: { type: integer }
-        min_client_version: { type: string, example: '0.1.0' }
+            max_packs_per_redeem: { type: integer, example: 13 }
         payment_methods:
           type: array
           items: { type: string, enum: [lightning, card, btc] }
@@ -466,10 +510,11 @@ components:
     Codebook:
       type: object
       required: [codebook_hex, len, codebook_id]
+      additionalProperties: false
       properties:
         codebook_hex: { $ref: '#/components/schemas/Hex' }
         len: { type: integer }
-        codebook_id: { type: string, pattern: '^[0-9a-f]{8}$' }
+        codebook_id: { type: [string, 'null'], pattern: '^[0-9a-f]{8}$' }
 
     PurchaseRequest:
       type: object
@@ -480,24 +525,21 @@ components:
           type: string
           enum: [trial, onetime, monthly, yearly]
           default: onetime
-          description: trial = 1 token. The server enforces the price floor (5% tolerance).
-        tokens:
-          type: integer
-          minimum: 1
-          description: Optional. Defaults to a full pack (100). Clamped server-side.
-        success_url: { type: string, format: uri, description: card only }
-        cancel_url: { type: string, format: uri, description: card only }
+          description: trial (Lightning, 1 token), onetime (100), monthly (card), yearly (card, 13 packs).
+        success_url: { type: string, format: uri, description: Card only. Where Stripe sends the user after paying. }
+        cancel_url: { type: string, format: uri, description: Card only. }
 
     Purchase:
       type: object
-      required: [purchase_id, method, tokens, expires_at, payment]
+      required: [purchase_id, method, plan, packs, tokens, expires_at, payment]
+      additionalProperties: false
       properties:
-        purchase_id:
-          type: string
-          description: Bearer credential (the LN claim nonce, or the card checkout nonce). Store securely.
-        method: { type: string, enum: [lightning, card, btc] }
-        tokens: { type: integer }
-        expires_at: { type: integer, description: Unix seconds. }
+        purchase_id: { type: string, pattern: '^(ln|card)_[0-9a-f]+$', description: Bearer credential; store securely. }
+        method: { type: string, enum: [lightning, card] }
+        plan: { type: string }
+        packs: { type: integer, description: Packs this purchase can redeem. }
+        tokens: { type: integer, description: Total tokens across those packs. }
+        expires_at: { type: integer, description: Unix seconds after which payment is no longer accepted. }
         payment:
           oneOf:
             - $ref: '#/components/schemas/LightningPayment'
@@ -511,35 +553,36 @@ components:
     LightningPayment:
       type: object
       required: [kind, bolt11, amount_sat]
+      additionalProperties: false
       properties:
         kind: { type: string, const: lightning }
-        bolt11: { type: string }
+        bolt11: { type: string, description: Show as a QR code or hand to a Lightning wallet. }
         amount_sat: { type: integer }
 
     CardPayment:
       type: object
       required: [kind, checkout_url]
+      additionalProperties: false
       properties:
         kind: { type: string, const: card }
-        checkout_url: { type: string, format: uri }
+        checkout_url: { type: string, format: uri, description: Open in a browser. }
 
     PurchaseStatus:
       type: object
       required: [purchase_id, state]
+      additionalProperties: false
       properties:
         purchase_id: { type: string }
         state: { type: string, enum: [pending, paid, redeemed, expired] }
-        redemption_code:
-          type: string
-          description: card only, present when state = paid. Single-use.
         expires_at: { type: integer }
 
     BlindedPack:
       type: object
       required: [alphas, base_points]
+      additionalProperties: false
       properties:
         alphas:
-          description: α_i = r_i·P_i
+          description: Blinded points α_i = r_i·P_i.
           type: array
           minItems: 1
           items: { $ref: '#/components/schemas/PointHex' }
@@ -551,30 +594,32 @@ components:
 
     RedeemRequest:
       type: object
-      required: [method, credential, packs]
+      required: [packs]
       properties:
-        method: { type: string, enum: [lightning, card, btc] }
-        credential:
-          type: string
-          description: lightning = purchase_id (claim nonce); card = redemption_code; btc = psbtc1.… code from the SP scanner.
+        purchase_id: { type: string, description: From POST /v1/tokens/purchase (Lightning or card). }
+        btc_code: { type: string, description: 'psbtc1.… code from the silent-payment scanner.' }
         packs:
-          description: More than one pack only for the card yearly plan (13 monthly packs). Otherwise exactly 1. The server MUST enforce the count the credential authorizes.
           type: array
           minItems: 1
           maxItems: 13
           items: { $ref: '#/components/schemas/BlindedPack' }
+      oneOf:
+        - required: [purchase_id]
+        - required: [btc_code]
 
     SignedPack:
       type: object
       required: [betas, proof_challenge, proof_response, poseidon_proofs]
+      additionalProperties: false
       properties:
         betas:
+          description: Signed blinded points β_i, in the same order as alphas.
           type: array
           items: { $ref: '#/components/schemas/PointHex' }
         proof_challenge: { $ref: '#/components/schemas/Hex' }
         proof_response: { $ref: '#/components/schemas/Hex' }
         poseidon_proofs:
-          description: Per-token [challenge, response] Poseidon DLEQ proofs (in-circuit).
+          description: Per-token [challenge, response] Poseidon DLEQ proofs, used inside the spend circuit.
           type: array
           items:
             type: array
@@ -585,10 +630,20 @@ components:
     RedeemResponse:
       type: object
       required: [packs]
+      additionalProperties: false
       properties:
         packs:
           type: array
           items: { $ref: '#/components/schemas/SignedPack' }
+
+    BoardSlots:
+      type: object
+      required: [slots]
+      additionalProperties: false
+      properties:
+        slots:
+          type: array
+          items: { type: integer, minimum: 0, maximum: 65535 }
 
     BoardPublishRequest:
       type: object
@@ -601,17 +656,24 @@ components:
     BoardPublishResponse:
       type: object
       required: [board_size, board_root_hex]
+      additionalProperties: false
       properties:
         board_size: { type: integer }
         board_root_hex: { $ref: '#/components/schemas/FieldHex' }
 
+    RevocationRoot:
+      type: object
+      required: [revocation_root_hex]
+      additionalProperties: false
+      properties:
+        revocation_root_hex: { $ref: '#/components/schemas/FieldHex' }
+
     RevocationProof:
       type: object
       required: [is_included, siblings_hex, path_bits]
+      additionalProperties: false
       properties:
-        is_included:
-          type: boolean
-          description: True = pack revoked; the SDK reports pack_revoked and stops spending from it.
+        is_included: { type: boolean, description: True when the pack is revoked. }
         siblings_hex:
           type: array
           items: { $ref: '#/components/schemas/FieldHex' }
@@ -619,21 +681,31 @@ components:
           type: array
           items: { type: boolean }
 
+    FilterBatchRequest:
+      type: object
+      required: [heights]
+      properties:
+        heights:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { type: integer, minimum: 0 }
+
     FilterBatch:
       type: object
       required: [filters, missing]
+      additionalProperties: false
       properties:
         filters:
           type: array
           items:
             type: object
             required: [height, filter_hex, num_entries]
+            additionalProperties: false
             properties:
               height: { type: integer }
               num_entries: { type: integer }
-              filter_hex:
-                description: Raw PSVR filter. Byte 4 is the format version (3 or 5).
-                allOf: [ { $ref: '#/components/schemas/Hex' } ]
+              filter_hex: { $ref: '#/components/schemas/Hex' }
         missing:
           type: array
           items: { type: integer }
@@ -645,9 +717,7 @@ components:
         nullifier_hex: { $ref: '#/components/schemas/FieldHex' }
         revocation_root_hex: { $ref: '#/components/schemas/FieldHex' }
         current_month: { type: integer }
-        proof_hex:
-          description: Compressed Groth16 proof (BN254).
-          allOf: [ { $ref: '#/components/schemas/Hex' } ]
+        proof_hex: { $ref: '#/components/schemas/Hex' }
 
     AnalyzeBatchRequest:
       type: object
@@ -667,17 +737,17 @@ components:
     AnalyzeBatchResponse:
       type: object
       required: [responses]
+      additionalProperties: false
       properties:
         responses:
           type: array
           items:
             type: object
             required: [ok]
+            additionalProperties: false
             properties:
               ok: { type: boolean }
               evaluated_point: { $ref: '#/components/schemas/PointHex' }
               proof_challenge: { $ref: '#/components/schemas/Hex' }
               proof_response: { $ref: '#/components/schemas/Hex' }
-              error:
-                description: Present when ok = false.
-                allOf: [ { $ref: '#/components/schemas/Error/properties/error' } ]
+              error: { $ref: '#/components/schemas/ErrorDetail' }

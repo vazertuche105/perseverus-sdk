@@ -7,7 +7,7 @@ Goal: in about 15 minutes, analyse a real Bitcoin coin against the production se
 - **Rust** (stable, via [rustup](https://rustup.rs)).
 - **JDK 17 or newer**. Gradle comes with the sample through its wrapper.
 - **`pk.bin`**, the spend circuit's proving key, is already in the repo at [`assets/circuit-v10/pk.bin`](../assets/circuit-v10/), and the sample uses it automatically. Its SHA-256 is `ca79225709f48f20ab00549d51d6876e91a383047b13083846e85d326f8b909b`.
-- **Tor**, to use the production `.onion` endpoint: `brew install tor && tor` on macOS, or `apt install tor` on Linux. It listens on `127.0.0.1:9050`.
+- **Tor**, running before you start: `brew install tor && tor` on macOS, or `apt install tor` on Linux. It listens on `127.0.0.1:9050`. (Tor Browser works too while it's open: set `MEDUSA_TOR_SOCKS=socks5h://127.0.0.1:9150`.) The sample sends everything over Tor, including its chain-tip lookup, so it's safe to try with a wallet that holds real funds. The SDK refuses clearnet connections to any server except one on your own machine.
 - **Tokens:** either some in a Medusa wallet to import, or a Lightning wallet to pay a 1-token trial invoice (about $0.25).
 
 ## Step 1: get the code and build
@@ -17,8 +17,7 @@ git clone https://github.com/vazertuche105/perseverus-sdk
 cd perseverus-sdk
 cargo test -p perseverus-sdk            # quick sanity check (report parity + schema)
 cd sdk/examples/kotlin-jvm
-export MEDUSA_ENDPOINT=http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion
-./gradlew run --args="status"
+./gradlew run --args="status"                # talks to the production .onion over Tor
 ```
 
 The first `run` compiles the Rust library, generates the Kotlin bindings (`com.btcmedusa.perseverus`) and compiles the sample. Expected output:

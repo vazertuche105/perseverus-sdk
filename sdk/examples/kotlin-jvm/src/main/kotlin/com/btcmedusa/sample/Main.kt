@@ -6,8 +6,14 @@
 //   ./gradlew run --args="buy-trial"                           (pays a real ~$0.25 Lightning invoice)
 //   ./gradlew run --args="analyze <txid>:<vout>:<height> ..."  (pre-broadcast analysis)
 //
+// Everything goes through Tor by default, so it's safe to try with a wallet
+// that holds real funds. Start Tor first (`brew install tor && tor`, or keep
+// Tor Browser open and set MEDUSA_TOR_SOCKS=socks5h://127.0.0.1:9150).
+//
 // Environment:
-//   MEDUSA_ENDPOINT  server URL (default: the clearnet dev server; a .onion uses Tor on 127.0.0.1:9050)
+//   MEDUSA_ENDPOINT  server URL (default: the production .onion over Tor; a
+//                    localhost URL uses a direct connection, for a local server)
+//   MEDUSA_TOR_SOCKS Tor SOCKS proxy (default: socks5h://127.0.0.1:9050)
 //   MEDUSA_DATA_DIR  where this sample keeps its tokens (default: ~/.perseverus-sample)
 //   MEDUSA_PROVING_KEY  path to the circuit's pk.bin (default: the repo's
 //                    assets/circuit-v10/pk.bin; the production server
@@ -28,16 +34,23 @@ import com.btcmedusa.perseverus.ReportStatus
 import com.btcmedusa.perseverus.Transport
 import com.google.gson.JsonParser
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.URI
 import kotlin.system.exitProcess
 
-private const val DEFAULT_ENDPOINT = "http://178.105.65.132:3030"
+private const val DEFAULT_ENDPOINT = "http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion"
+private const val DEFAULT_TOR_SOCKS = "socks5h://127.0.0.1:9050"
+// mempool.space's own onion service, for the chain tip (see `analyze`).
+private const val MEMPOOL_ONION_TIP = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/api/blocks/tip/height"
 private const val BUNDLED_PK = "../../../assets/circuit-v10/pk.bin"
 
 fun main(args: Array<String>) {
     val endpoint = System.getenv("MEDUSA_ENDPOINT") ?: DEFAULT_ENDPOINT
     val dataDir = System.getenv("MEDUSA_DATA_DIR") ?: File(System.getProperty("user.home"), ".perseverus-sample").path
-    val transport = if (endpoint.contains(".onion")) Transport.Tor(socksProxy = null) else Transport.Direct
+    val torSocks = System.getenv("MEDUSA_TOR_SOCKS") ?: DEFAULT_TOR_SOCKS
+    // The SDK only allows a direct connection to a server on this machine.
+    val transport = if (isLocalhost(endpoint)) Transport.Direct else Transport.Tor(socksProxy = torSocks)
     // Real wallets ship pk.bin inside the app. Gradle runs this from
     // sdk/examples/kotlin-jvm, so ../../../ is the repo root.
     val provingKey = System.getenv("MEDUSA_PROVING_KEY")
@@ -70,8 +83,32 @@ private fun usage() {
           import-sparrow [path-to-sparrow-config]
           buy-trial
           analyze <txid>:<vout>:<height> [...] [--decoys N] [--tip HEIGHT]
+
+        Connects over Tor (start it first). --decoys is at least 4; 8 by default.
         """.trimIndent(),
     )
+}
+
+private fun isLocalhost(endpoint: String): Boolean {
+    val host = runCatching { URI(endpoint).host }.getOrNull()?.removeSurrounding("[", "]") ?: return false
+    if (host.equals("localhost", ignoreCase = true) || host == "::1") return true
+    val parts = host.split(".")
+    return parts.size == 4 && parts[0] == "127" && parts.all { it.toIntOrNull() in 0..255 }
+}
+
+/** The chain tip over Tor, from mempool.space's onion, so asking reveals
+ *  neither your IP nor when you're about to check coins. */
+private fun chainTipOverTor(torSocks: String): UInt {
+    val hostPort = torSocks.substringAfter("://").split(":")
+    val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress.createUnresolved(hostPort[0], hostPort.getOrNull(1)?.toInt() ?: 9050))
+    return try {
+        val conn = URI(MEMPOOL_ONION_TIP).toURL().openConnection(proxy)
+        conn.connectTimeout = 60_000
+        conn.readTimeout = 60_000
+        conn.getInputStream().bufferedReader().readText().trim().toUInt()
+    } catch (e: Exception) {
+        throw IllegalArgumentException("couldn't get the chain tip over Tor ($torSocks): ${e.message}. Is Tor running? Or pass --tip HEIGHT")
+    }
 }
 
 private fun status(medusa: Perseverus, endpoint: String, dataDir: String) {
@@ -165,8 +202,8 @@ private fun analyze(medusa: Perseverus, args: List<String>) {
     }
     require(inputs.isNotEmpty()) { "give at least one <txid>:<vout>:<height>" }
     // A real wallet knows its chain tip from its own headers. The sample asks
-    // mempool.space, which sees only that someone asked for the tip.
-    val chainTip = tip ?: URI("https://mempool.space/api/blocks/tip/height").toURL().readText().trim().toUInt()
+    // mempool.space's onion over Tor.
+    val chainTip = tip ?: chainTipOverTor(System.getenv("MEDUSA_TOR_SOCKS") ?: DEFAULT_TOR_SOCKS)
 
     println("Analyzing ${inputs.size} input(s), $decoys decoys each, tip $chainTip, balance ${medusa.tokenBalance()}…")
     val t0 = System.currentTimeMillis()

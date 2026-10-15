@@ -44,7 +44,7 @@ val medusa = Perseverus.connect(Config(
 |---|---|---|
 | `endpoint` | `String` | Server base URL, without `/v1`. Production is the `.onion` above. |
 | `dataDir` | `String` | Directory for the token store (`perseverus-packs.json`). **Back it up with the wallet.** Tokens are bearer value; the server keeps no copy. |
-| `transport` | `Transport` | `Transport.Tor(socksProxy)` routes everything through a Tor SOCKS proxy and **fails closed**: if Tor is down, calls fail, they never fall back to clearnet. `socksProxy = null` means `socks5h://127.0.0.1:9050`. `Transport.Direct` is clearnet for development only; it is refused for `.onion` endpoints. Loopback endpoints (`127.0.0.1`, `localhost`) always go direct. |
+| `transport` | `Transport` | `Transport.Tor(socksProxy)` routes everything through a Tor SOCKS proxy and **fails closed**: if Tor is down, calls fail, they never fall back to clearnet. `socksProxy = null` means `socks5h://127.0.0.1:9050`. `Transport.Direct` is clearnet and **only allowed for a server on the same machine** (`localhost`, `127.x.x.x`, `::1`), for local development; `connect` refuses it for any other endpoint, because the server would see the user's IP address. Loopback endpoints always go direct. |
 | `expectedServerPubkey` | `String?` | Pin the server's OPRF public key (hex). Strongly recommended in production. |
 | `provingKeyPath` | `String?` | Path to `pk.bin` (4,133,200 bytes, SHA-256 `ca7922…909b`). **Ship it inside your app.** The production server does not serve it, so a malicious server can't hand you a different one. If `null`, the SDK tries `GET /v1/circuit/pk` (development servers only) and caches the result. Only `analyzeInputs` needs it. |
 
@@ -52,7 +52,7 @@ val medusa = Perseverus.connect(Config(
 
 | Exception | Cause |
 |---|---|
-| `InvalidArgument` | Empty endpoint, `.onion` with `Transport.Direct`, or a bad SOCKS URL. |
+| `InvalidArgument` | Empty endpoint, `Transport.Direct` with a server that isn't on this machine, or a bad SOCKS URL. |
 | `Network` | Tor not running, server unreachable, timeout (180 s). Retry later. |
 | `Server` | The server answered with an error (rare here). |
 | `Unsupported` | The server's API isn't `1.x`, or this SDK is older than `min_client_version`. Update the SDK. |
@@ -283,7 +283,7 @@ fun analyzeInputs(inputs: List<InputRef>, options: AnalyzeOptions): AnalysisResu
 
 | Field | Meaning |
 |---|---|
-| `decoysPerInput` | Decoy blocks per real funding block. More decoys mean more privacy and more download. **8** is the reference wallet's value. `0` means no decoys: the server learns the exact blocks, so don't use it in production. |
+| `decoysPerInput` | Decoy blocks per real funding block. More decoys mean more privacy and more download. **8** is the reference wallet's value. The minimum is **4** (`minDecoysPerInput()`); with fewer, `analyzeInputs` throws `InvalidArgument` before contacting the server. |
 | `chainTip` | Current chain height from your wallet. It's the upper bound for picking decoys, so decoys are never beyond the tip. |
 
 **`AnalysisResult`**

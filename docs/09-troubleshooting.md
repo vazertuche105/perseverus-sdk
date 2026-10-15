@@ -8,7 +8,7 @@ Find the message you're seeing. In Kotlin, `e.message` prints as `reason=…` or
 |---|---|---|
 | `Network`: `… error sending request …`, `connection refused`, `proxy` | Tor isn't running, or isn't at the SOCKS address you gave. | Start Tor or wait until it reports ready. Check `socksProxy`; the default is `socks5h://127.0.0.1:9050`. On desktop, test with `curl --socks5-hostname 127.0.0.1:9050 http://medusayl5…had.onion/v1/meta`. |
 | `Network`: timeouts, or slow first call | Building a new Tor circuit to an onion service takes a few seconds, sometimes more on mobile. | Retry. The first call after Tor starts is often the slowest. |
-| `InvalidArgument`: `.onion endpoints require Transport.Tor` | `Transport.Direct` with the onion URL. | Use `Transport.Tor`. |
+| `InvalidArgument`: `Transport.Direct is only allowed for a server on this machine…` | `Transport.Direct` with a remote server (production, or a dev server on another host). | Use `Transport.Tor` with the `.onion` endpoint. `Direct` is only for a server on `localhost`. |
 | `Verification`: `server pubkey … does not match pinned …` | You're talking to a different server, or the pinned key has a typo. | Check `endpoint` and the key (`dc03c12d…560b`). **Don't** turn off pinning to make it go away. |
 | `Unsupported`: `server API … is not 1.x` / `older than the server's minimum` | The SDK version and server version are incompatible. | Update the SDK to a current commit and rebuild. |
 | `Storage`: `create …` / `write …` | `dataDir` isn't writable. | Use app-private storage (`context.filesDir`). |
@@ -43,6 +43,7 @@ Find the message you're seeing. In Kotlin, `e.message` prints as `reason=…` or
 | Report `ERROR`, `spend_rejected` with `proof_invalid` | The proof didn't verify: usually a `pk.bin` from a different circuit version. | Use the `pk.bin` matching `circuit.version` in `/v1/meta`. |
 | Report `ERROR`, `spend_failed` with `network: …` | The connection dropped during the spend. The SDK counts those tokens as spent, because the server may have used them. | Retry the check. |
 | `Verification`: `filter … wants codebook …, server codebook is …` | The server is mid-update between codebooks. | Retry shortly. If it persists, report it. |
+| `InvalidArgument`: `decoys_per_input must be at least 4…` | `decoysPerInput` below the minimum. | Use 8. Nothing was sent or spent. |
 | Very slow analysis | Proving takes about 0.5–1.5 s per matched funding transaction on a phone, plus filter downloads over Tor. | Run it as soon as the user opens the review screen, not when they press Send. Cache graded reports by txid. |
 
 ## Building

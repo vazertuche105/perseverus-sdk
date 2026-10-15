@@ -31,11 +31,15 @@ use crate::store::Store;
 const MAX_FILTERS_PER_REQUEST: usize = 200;
 const MAX_SPENDS_PER_REQUEST: usize = 64;
 const DEFAULT_LAPLACE_SCALE: f64 = 5.0;
+/// Fewest decoy blocks allowed per real funding block. Below this the real
+/// heights stand out too much; 8 is the recommended value.
+pub const MIN_DECOYS_PER_INPUT: u32 = 4;
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct AnalyzeOptions {
     /// Decoy blocks fetched per real funding block. Higher = more privacy,
-    /// more bandwidth (each filter is tens to hundreds of KB). Sparrow uses 8.
+    /// more bandwidth (each filter is tens to hundreds of KB). Minimum 4
+    /// (`analyze_inputs` refuses less); 8 is recommended, as Sparrow uses.
     pub decoys_per_input: u32,
     /// Current chain tip height (upper bound for decoy selection).
     pub chain_tip: u32,
@@ -111,7 +115,21 @@ pub(crate) fn heights_with_decoys(real: &HashSet<u32>, d: usize, tip: u32) -> Ve
     v
 }
 
+/// Reject options that would weaken privacy. Called before any network use.
+pub(crate) fn validate_options(opts: &AnalyzeOptions) -> Result<(), PerseverusError> {
+    if opts.decoys_per_input < MIN_DECOYS_PER_INPUT {
+        return Err(PerseverusError::InvalidArgument {
+            reason: format!(
+                "decoys_per_input must be at least {MIN_DECOYS_PER_INPUT} (8 recommended); \
+                 fewer would let the server see which blocks your coins are in"
+            ),
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -> Result<AnalysisResult, PerseverusError> {
+    validate_options(opts)?;
     if inputs.is_empty() {
         return Ok(AnalysisResult { reports: vec![], tokens_spent: 0, filters_downloaded: 0, bytes_downloaded: 0 });
     }

@@ -8,7 +8,7 @@ Responses on this page come from the server's own test suite, which records real
 
 | | |
 |---|---|
-| Base URL | `http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion` over Tor (`socks5h`). Development only: `http://178.105.65.132:3030`, where the server sees your IP. |
+| Base URL | `http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion` over Tor (`socks5h`). Always connect over Tor: anything else shows the server your IP address. |
 | Format | JSON, `snake_case`. Binary values are lowercase hex. Curve points are compressed Baby Jubjub (32 bytes). Field elements are BN254 Fr, little-endian (32 bytes). Months are `YYYYMM` integers. |
 | Auth | None. Tokens and purchase ids are the only credentials, and they travel in request bodies. |
 | Idempotency | `Idempotency-Key` header (1–128 chars) on `tokens/purchase`, `tokens/redeem` and `analyze/batch`. The same key and body within 24 h replays the stored response with header `Idempotent-Replayed: true`. The same key with a different body is refused with `422 idempotency_key_reused`. 5xx responses aren't stored. Keys are held in memory, so a server restart forgets them. |

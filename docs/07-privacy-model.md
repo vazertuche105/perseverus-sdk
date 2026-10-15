@@ -20,11 +20,12 @@ This is checked, not just stated. An end-to-end test records every byte a wallet
 
 **Debug mode doesn't change this.** `PERSEVERUS_DEBUG=1` only prints to the device's own stderr. It sends nothing extra to the server, and even locally it never prints txids, tags, heights, pack ids or nullifiers.
 
-Three things are still up to you when testing with real funds:
+The SDK also enforces the two settings that could weaken this:
 
-- **Use Tor.** With `Transport.Direct`, the server sees your IP address and when you checked. That still says nothing about which coins, but your IP plus timing is information. Use the `.onion` endpoint with `Transport.Tor`.
-- **Keep decoys at 8 or more.** `decoysPerInput = 0` sends your coins' real block heights unhidden.
-- **Prefer Lightning over card** if you'd rather your identity weren't attached even to the purchase. A card payment tells Stripe and the server who bought tokens, though never what they checked.
+- **Tor only.** `connect` refuses `Transport.Direct` for any server not on your own machine, so the server never sees your IP address.
+- **At least 4 decoys** per real block (8 recommended). Fewer is refused before anything is sent.
+
+One choice is still yours: **prefer Lightning over card** if you'd rather your identity weren't attached even to the purchase. A card payment tells Stripe and the server who bought tokens, though never what they checked.
 
 ## Who sees what
 
@@ -42,11 +43,11 @@ Three things are still up to you when testing with real funds:
 The SDK enforces all of these. Don't work around them.
 
 1. **No transaction identifiers leave the device.** Matching happens locally against downloaded filters. There is no "look up txid X" API, and adding one, even for debugging, would break the product.
-2. **Decoys.** Real block heights are mixed with Laplace-distributed decoys and shuffled. Use `decoysPerInput >= 8`. With `0`, the server learns the exact blocks the user's coins came from.
+2. **Decoys.** Real block heights are mixed with Laplace-distributed decoys and shuffled. Use `decoysPerInput = 8`; the SDK refuses fewer than 4.
 3. **Separate circuits, no heights on spends.** Filter downloads, token spends, redemptions and board publishes each use a different Tor circuit. The spend request carries no heights, so the server can't join a spend to the filter download that preceded it.
 4. **Blind issuance.** Tokens are generated and blinded on the device; the server signs without seeing them. A spend can't be traced to the purchase that paid for it.
 5. **Verified server answers.** Every signature and OPRF evaluation comes with a DLEQ proof checked against the pinned server key, so the server can't give a targeted user different results to tag them.
-6. **Fail closed.** `Transport.Tor` never falls back to clearnet.
+6. **Fail closed.** `Transport.Tor` never falls back to clearnet, and `Transport.Direct` is refused for any server not on the same machine.
 7. **Proving key in the app.** `pk.bin` ships with the wallet, so a malicious server can't substitute a key.
 
 ## What tokens protect against
@@ -66,7 +67,7 @@ These are honest edges of the current version, in rough order of importance.
 ## Integrator checklist
 
 - Never log txids next to Medusa activity, and never send them to analytics or crash reporting together.
-- Keep `decoysPerInput >= 8`.
+- Keep `decoysPerInput` at 8 (4 is the enforced minimum).
 - Pin `expectedServerPubkey`.
 - Bundle `pk.bin` and verify its hash.
 - Don't set `PERSEVERUS_DEBUG` in release builds. The SDK prints nothing by default; with it set, it prints progress and timing to stderr (never txids, tags, heights, pack ids or nullifiers), which on a phone lands in the system log.

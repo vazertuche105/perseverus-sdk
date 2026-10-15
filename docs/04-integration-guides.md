@@ -267,7 +267,7 @@ Branch on the code (`e.reason.substringBefore(':')` for `Server`, `report.error.
 ## Testing
 
 - **Against production with real money, cheaply:** a Lightning `TRIAL` is 1 token (about $0.25).
-- **Without Tor during development:** `Transport.Direct` with `endpoint = "http://178.105.65.132:3030"`. The server sees your IP, so use it only for development. The key and data are the same as production.
+- **Without Tor:** only against a server on your own machine (`Transport.Direct` with a `localhost` endpoint; see the server repository's local-server instructions). The SDK refuses `Transport.Direct` for any other server, production included, so testing with a real wallet can't expose your IP.
 - **Known coin:** `728da0f74813fec9c1381ec9e82ab7a096d1b637b845c446f3ac02db14ccb44f`, vout `0`, height `945270` returns grade **D** (peel chain) and raw tag `V3LEAN:b40014`.
 - **Ungraded and not-covered:** a txid that isn't in its block (e.g. a random 64-hex string at a covered height) returns `UNGRADED` for free. A height outside `covered_ranges` returns `NOT_COVERED`.
 - The `sdk/examples/kotlin-jvm` app exercises every call from the command line.
@@ -276,13 +276,13 @@ Branch on the code (`e.reason.substringBefore(':')` for `Server`, `report.error.
 
 ## Release checklist
 
-- [ ] `Transport.Tor` everywhere in release builds; `Direct` is impossible to select.
+- [ ] `Transport.Tor` everywhere in release builds (the SDK already refuses `Direct` for anything but localhost).
 - [ ] `expectedServerPubkey` pinned to `dc03c12d…560b`.
 - [ ] `pk.bin` bundled and its SHA-256 checked.
 - [ ] `dataDir` included in the wallet backup and excluded from cloud sync between devices.
 - [ ] Pending purchases resumed at startup.
 - [ ] All SDK calls off the main thread.
-- [ ] `decoysPerInput` at least 8.
+- [ ] `decoysPerInput` 8 (the SDK refuses fewer than 4).
 - [ ] No txid, outpoint or address sent to any Medusa endpoint by your own code, and not logged alongside Medusa activity.
 - [ ] Reports cached by funding txid; `UNGRADED` and `NOT_COVERED` shown as neutral.
 - [ ] The broadcast is never blocked by the check.

@@ -42,7 +42,13 @@ use perseverus_core::poseidon::{poseidon_config, poseidon_hash_many, PoseidonFie
 use rand::rngs::OsRng;
 use serde::Deserialize;
 
-pub use analyze::{AnalysisResult, AnalyzeOptions};
+pub use analyze::{AnalysisResult, AnalyzeOptions, MIN_DECOYS_PER_INPUT};
+
+/// The fewest decoys per input `analyze_inputs` accepts (8 is recommended).
+#[uniffi::export]
+pub fn min_decoys_per_input() -> u32 {
+    MIN_DECOYS_PER_INPUT
+}
 pub use error::PerseverusError;
 pub use report::{Finding, InputRef, PrivacyReport, Recommendation, ReportError, ReportStatus, Severity, SeverityCounts};
 pub use store::PackInfo;
@@ -61,7 +67,9 @@ pub enum Transport {
     /// Route everything through a Tor SOCKS proxy (fails closed if Tor is
     /// down). `socks_proxy` defaults to `socks5h://127.0.0.1:9050`.
     Tor { socks_proxy: Option<String> },
-    /// Clearnet. Development only: the server sees your IP.
+    /// Clearnet, for a server running on this machine only (`localhost`,
+    /// `127.0.0.0/8`, `::1`). `connect` refuses it for any other endpoint,
+    /// because the server would see the user's IP address.
     Direct,
 }
 
@@ -153,8 +161,13 @@ impl Perseverus {
         }
         match &config.transport {
             Transport::Direct => {
-                if base_url.contains(".onion") {
-                    return Err(PerseverusError::InvalidArgument { reason: ".onion endpoints require Transport.Tor".into() });
+                if !is_loopback_endpoint(&base_url) {
+                    return Err(PerseverusError::InvalidArgument {
+                        reason: "Transport.Direct is only allowed for a server on this machine (localhost); \
+                                 anything else would show the server your IP address. \
+                                 Use Transport.Tor with the .onion endpoint"
+                            .into(),
+                    });
                 }
                 transport::configure("DIRECT", None)
             }
@@ -390,6 +403,7 @@ impl Perseverus {
     /// covered (no filter yet) cost nothing. Fails with `InsufficientTokens`
     /// before spending anything if the balance is too low.
     pub fn analyze_inputs(&self, inputs: Vec<InputRef>, options: AnalyzeOptions) -> Result<AnalysisResult, PerseverusError> {
+        analyze::validate_options(&options)?; // before any network use
         let month = self.current_month()?;
         let make_spend = || self.spend_client();
         let ctx = analyze::Ctx { query: &self.query, spend: &make_spend, store: &self.store, current_month: month };
@@ -545,5 +559,38 @@ mod tests {
         assert_eq!(add_months(202610, 1), 202611);
         assert_eq!(add_months(202612, 1), 202701);
         assert_eq!(add_months(202611, 3), 202702);
+    }
+}
+
+/// True if `endpoint` is a URL whose host is this machine: `localhost`, an
+/// IPv4 loopback address (127.0.0.0/8) or `::1`.
+fn is_loopback_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint) else { return false };
+    let Some(host) = url.host_str() else { return false };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::is_loopback_endpoint as l;
+
+    #[test]
+    fn only_this_machine_is_loopback() {
+        for ok in ["http://localhost:3030", "http://LOCALHOST", "http://127.0.0.1:3030/", "http://127.8.9.10", "http://[::1]:3030"] {
+            assert!(l(ok), "{ok}");
+        }
+        for bad in [
+            "http://178.105.65.132:3030",
+            "http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion",
+            "http://localhost.example.com",
+            "http://127.0.0.1.example.com",
+            "http://192.168.1.10:3030",
+            "http://10.0.0.2",
+            "not a url",
+            "",
+        ] {
+            assert!(!l(bad), "{bad}");
+        }
     }
 }

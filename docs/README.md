@@ -37,7 +37,7 @@ The machine-readable contract lives in [`blueberry-v1/`](blueberry-v1/):
 ## Three rules that matter most
 
 1. **Never send a txid, outpoint or address to the server.** No API in this project does, and none ever will. The whole product depends on it (see [Privacy model](07-privacy-model.md)).
-2. **Use Tor in production.** `Transport.Tor` fails closed. `Transport.Direct` shows the user's IP to the server and exists only for development.
+2. **Use Tor.** `Transport.Tor` fails closed. The SDK refuses `Transport.Direct` for any server not on the same machine, so a user's IP never reaches the server.
 3. **Back up the SDK's data directory with the wallet.** Tokens are bearer value stored only on the device. If the directory is lost, so are the tokens.
 
 ## Getting help

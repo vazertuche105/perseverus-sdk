@@ -11,6 +11,7 @@
 //! land here too once Phase 5 lands. Keep all wallet-facing crypto
 //! orchestration in this crate so the JNI layer stays a thin shim.
 
+pub mod debug;
 pub mod issuance_client;
 pub mod spend_client;
 pub mod query_client;

@@ -214,10 +214,6 @@ fn query_v5<R: Rng>(
         )));
     }
 
-    eprintln!("[diag:query-v5] block={} txid={} vout={}",
-        block_height, hex::encode(&txid), vout_index);
-    eprintln!("[diag:query-v5] block_hash={} num_entries={} golomb_p={} code_bits={}",
-        hex::encode(&filter.block_hash), filter.num_entries, filter.golomb_p, filter.code_bits);
 
     // ─── Scan Column A for the txid (per-TX keying) ─────────
     let sorted_hashes = filter.decode_hashes()
@@ -264,8 +260,6 @@ fn query_v5<R: Rng>(
         "decrypted code {} out of codebook range (len {})", code, codebook.len()
     )))?;
 
-    eprintln!("[diag:query-v5] rank={} enc_code={} -> code={} -> tag=0x{:06x}",
-        rank, enc_code, code, tag24);
 
     Ok(QueryResult {
         txid,

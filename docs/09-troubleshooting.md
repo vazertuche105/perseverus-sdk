@@ -54,6 +54,10 @@ Find the message you're seeing. In Kotlin, `e.message` prints as `reason=…` or
 | `cargo ndk` can't find the NDK | `ANDROID_NDK_HOME` isn't set. | Point it at an installed NDK. |
 | Kotlin: `Type mismatch: inferred type is Int but UInt was expected` | The API uses unsigned types. | Use `8u`, `.toUInt()`, `.toULong()`. |
 
+## Debug output
+
+The SDK prints nothing by default. Set the environment variable `PERSEVERUS_DEBUG=1` before the SDK loads to get progress and timing lines on stderr: filter downloads, proof times, server response codes, and pass/fail checks run before each proof (whether the token's signature, nullifier and dates are valid). The checks solve the circuit a second time, so analysis is slower in this mode. The output never contains txids, tags, block heights, pack ids or nullifiers, but don't ship release builds with it on.
+
 ## Still stuck
 
 Collect the exception class and message, the `rawTag` or `error.code` from the report, the SDK commit, and the output of `GET /v1/meta`. Send them to Perseverus. **Don't include txids, addresses or `purchaseId`s** in bug reports.

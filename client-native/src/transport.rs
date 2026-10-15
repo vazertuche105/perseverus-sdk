@@ -257,7 +257,7 @@ fn build_client_auto(
                 // A connection-refused from the *proxy* throws an Err, which
                 // is what we're checking for.
                 Ok(_) => {
-                    eprintln!("[transport] Auto: using Tor (SOCKS5 proxy reachable)");
+                    crate::debug_log!("[transport] Auto: using Tor (SOCKS5 proxy reachable)");
                     return Ok(client);
                 }
                 Err(e) => {
@@ -270,17 +270,17 @@ fn build_client_auto(
                         || err_str.contains("SOCKS")
                         || err_str.contains("socks")
                     {
-                        eprintln!("[transport] Auto: Tor SOCKS5 proxy unreachable, falling back");
+                        crate::debug_log!("[transport] Auto: Tor SOCKS5 proxy unreachable, falling back");
                     } else {
                         // Proxy is up but target is unreachable — Tor is working.
-                        eprintln!("[transport] Auto: using Tor (proxy alive, probe target unreachable is OK)");
+                        crate::debug_log!("[transport] Auto: using Tor (proxy alive, probe target unreachable is OK)");
                         return Ok(client);
                     }
                 }
             }
         }
         Err(e) => {
-            eprintln!("[transport] Auto: failed to build Tor client: {}", e);
+            crate::debug_log!("[transport] Auto: failed to build Tor client: {}", e);
         }
     }
 
@@ -289,19 +289,19 @@ fn build_client_auto(
         let ohttp_mode = TransportMode::Ohttp { relay_url: relay.to_string() };
         match build_client_single(&ohttp_mode, timeout) {
             Ok(client) => {
-                eprintln!("[transport] Auto: falling back to OHTTP relay ({})", relay);
+                crate::debug_log!("[transport] Auto: falling back to OHTTP relay ({})", relay);
                 return Ok(client);
             }
             Err(e) => {
-                eprintln!("[transport] Auto: OHTTP also failed: {}", e);
+                crate::debug_log!("[transport] Auto: OHTTP also failed: {}", e);
             }
         }
     } else {
-        eprintln!("[transport] Auto: no OHTTP relay configured, skipping");
+        crate::debug_log!("[transport] Auto: no OHTTP relay configured, skipping");
     }
 
     // 3. Last resort: Direct
-    eprintln!("[transport] Auto: all privacy transports failed — falling back to DIRECT (no IP privacy!)");
+    crate::debug_log!("[transport] Auto: all privacy transports failed — falling back to DIRECT (no IP privacy!)");
     build_client_single(&TransportMode::Direct, timeout)
 }
 

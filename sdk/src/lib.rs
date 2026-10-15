@@ -355,7 +355,7 @@ impl Perseverus {
             for pack in &issued {
                 let tag = poseidon_hash_many(&poseidon_config(), &[PoseidonField::from(pack.pack_id)]);
                 if let Err(e) = issuance.publish_board_entry(pack, tag) {
-                    eprintln!("[perseverus] board publish for pack {} failed (tokens unaffected): {e}", pack.pack_id);
+                    perseverus_client_native::debug_log!("[perseverus] board publish failed (tokens unaffected): {e}");
                 }
             }
         }

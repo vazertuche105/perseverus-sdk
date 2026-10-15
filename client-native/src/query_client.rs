@@ -306,7 +306,7 @@ impl QueryClient {
 
         let nchunks = (heights.len() + MAX_BATCH_HEIGHTS - 1) / MAX_BATCH_HEIGHTS;
         for (i, chunk) in heights.chunks(MAX_BATCH_HEIGHTS).enumerate() {
-            eprintln!("[prefetch] batch chunk {}/{} ({} heights)", i + 1, nchunks, chunk.len());
+            crate::debug_log!("[prefetch] batch chunk {}/{} ({} heights)", i + 1, nchunks, chunk.len());
             let (filters, missing) = self.download_filters_batch_chunk(chunk)?;
             all_filters.extend(filters);
             all_missing.extend(missing);
@@ -318,7 +318,7 @@ impl QueryClient {
         PREFETCH_DOWNLOADED.store(actual, Ordering::Relaxed);
 
         if !all_missing.is_empty() {
-            eprintln!("[prefetch] {} heights out of coverage (no filter)", all_missing.len());
+            crate::debug_log!("[prefetch] {} heights out of coverage (no filter)", all_missing.len());
         }
         Ok(BatchResult { filters: all_filters, missing: all_missing })
     }

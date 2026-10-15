@@ -608,8 +608,7 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_issuanceRedeemYe
             // discard paid-for packs; log and continue (entries can be
             // re-published later via issuanceRepublish).
             if let Err(e) = client.publish_board_entry(issued, tag) {
-                eprintln!("[redeem-yearly] board publish failed for pack_id={} (non-fatal): {}",
-                    issued.pack_id, e);
+                crate::debug_log!("[redeem-yearly] board publish failed (non-fatal): {}", e);
             }
             blobs.push(serialize_issued_pack(issued)?);
         }
@@ -862,7 +861,7 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_spendBatchExecut
                         .map_err(|e| format!("set result[{}]: {}", i, e))?;
                 }
                 Err(e) => {
-                    eprintln!("[spend_batch] entry {} failed: {}", i, e);
+                    crate::debug_log!("[spend_batch] entry {} failed: {}", i, e);
                     // null already set by new_object_array default
                 }
             }
@@ -1096,7 +1095,7 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFilters(
         unique.sort();
         unique.dedup();
 
-        eprintln!("[prefetch] starting filter prefetch for {} unique heights", unique.len());
+        crate::debug_log!("[prefetch] starting filter prefetch for {} unique heights", unique.len());
         let t0 = std::time::Instant::now();
 
         // Spawn a thread per height (bounded by the number of UTXOs,
@@ -1110,7 +1109,7 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFilters(
                     let http = match build_http_for(&url, std::time::Duration::from_secs(60)) {
                         Ok(c) => c,
                         Err(e) => {
-                            eprintln!("[prefetch] transport error for height {}: {}", h, e);
+                            crate::debug_log!("[prefetch] transport error: {}", e);
                             return;
                         }
                     };
@@ -1120,16 +1119,15 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFilters(
                     // Never build on demand — a missing height is out of coverage.
                     match client.download_filter(h) {
                         Ok(data) => {
-                            eprintln!(
-                                "[prefetch] block {} ready ({}KB, {}ms)",
-                                h,
+                            crate::debug_log!(
+                                "[prefetch] filter ready ({}KB, {}ms)",
                                 data.len() / 1024,
                                 ht0.elapsed().as_millis()
                             );
                             crate::query_client::QueryClient::cache_filter(h, data);
                         }
                         Err(e) => {
-                            eprintln!("[prefetch] download error for height {}: {}", h, e);
+                            crate::debug_log!("[prefetch] download error: {}", e);
                         }
                     }
                 })
@@ -1140,7 +1138,7 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFilters(
             let _ = handle.join();
         }
 
-        eprintln!(
+        crate::debug_log!(
             "[prefetch] all {} filters ready in {}ms",
             height_vec.len(),
             t0.elapsed().as_millis()
@@ -1218,7 +1216,7 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFiltersW
         let mut unique: Vec<u32> = all_heights.into_iter().collect();
         unique.sort();
 
-        eprintln!(
+        crate::debug_log!(
             "[prefetch] starting filter prefetch for {} heights ({} real + {} decoy, {} decoys/block, scale={:.1})",
             unique.len(), real_count, unique.len() - real_count, decoys_per_block, laplace_scale
         );
@@ -1230,7 +1228,7 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFiltersW
         let client = crate::query_client::QueryClient::new(&url).with_http(http);
 
         let total = unique.len();
-        eprintln!("[prefetch] requesting {} filters in one batch", total);
+        crate::debug_log!("[prefetch] requesting {} filters in one batch", total);
 
         match client.download_filters_batch(&unique) {
             Ok(batch) => {
@@ -1240,7 +1238,7 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFiltersW
                     total_bytes += data.len();
                     crate::query_client::QueryClient::cache_filter(h, data);
                 }
-                eprintln!(
+                crate::debug_log!(
                     "[prefetch] batch done: {}/{} filters cached ({} KB total) in {}ms",
                     ok_count, total, total_bytes / 1024, t0.elapsed().as_millis()
                 );
@@ -1252,15 +1250,14 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFiltersW
                 // v3 filter. Leave them uncached — the per-UTXO query reports
                 // them as "no filter for this block".
                 if !batch.missing.is_empty() {
-                    eprintln!(
-                        "[prefetch] {} block(s) out of filter coverage (skipped, not built): {:?}",
-                        batch.missing.len(),
-                        &batch.missing[..batch.missing.len().min(12)]
+                    crate::debug_log!(
+                        "[prefetch] {} block(s) out of filter coverage (skipped, not built)",
+                        batch.missing.len()
                     );
                 }
             }
             Err(e) => {
-                eprintln!(
+                crate::debug_log!(
                     "[prefetch] batch request failed: {} — falling back to sequential",
                     e
                 );
@@ -1272,19 +1269,19 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFiltersW
                     let ht0 = std::time::Instant::now();
                     match client.download_filter(h) {
                         Ok(data) => {
-                            eprintln!(
-                                "[prefetch] {}/{} block {} ready ({}KB, {}ms)",
-                                i + 1, total, h, data.len() / 1024, ht0.elapsed().as_millis()
+                            crate::debug_log!(
+                                "[prefetch] {}/{} ready ({}KB, {}ms)",
+                                i + 1, total, data.len() / 1024, ht0.elapsed().as_millis()
                             );
                             crate::query_client::QueryClient::cache_filter(h, data);
                             ok_count += 1;
                         }
                         Err(e) => {
-                            eprintln!("[prefetch] {}/{} block {} failed: {}", i + 1, total, h, e);
+                            crate::debug_log!("[prefetch] {}/{} failed: {}", i + 1, total, e);
                         }
                     }
                 }
-                eprintln!(
+                crate::debug_log!(
                     "[prefetch] sequential fallback done: {}/{} in {}ms",
                     ok_count, total, t0.elapsed().as_millis()
                 );

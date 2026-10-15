@@ -46,10 +46,9 @@ use serde::{Deserialize, Serialize};
 type G1Projective = EdwardsProjective;
 type G1Affine = EdwardsAffine;
 
-use ark_ff::UniformRand;
 
 use perseverus_circuits::{CircuitField, RevocationSpendCircuit};
-use perseverus_core::dleq::{DleqProof, bjj_scalar_to_poseidon_field};
+use perseverus_core::dleq::DleqProof;
 use perseverus_core::oprf::{blind, verify_batch};
 use perseverus_core::issuance::IssuedPack;
 use perseverus_core::nullifier::compute_nullifier;
@@ -248,22 +247,22 @@ impl SpendClient {
         cache_path: &std::path::Path,
     ) -> Result<ProvingKey<Bn254>, SpendClientError> {
         if cache_path.exists() {
-            eprintln!("[bootstrap] loading cached pk from {}", cache_path.display());
+            crate::debug_log!("[bootstrap] loading cached pk from {}", cache_path.display());
             let bytes = std::fs::read(cache_path)
                 .map_err(|e| SpendClientError::Proof(format!("read cache: {}", e)))?;
             match ProvingKey::<Bn254>::deserialize_compressed(&bytes[..]) {
                 Ok(pk) => {
-                    eprintln!("[bootstrap] cached pk loaded ({} bytes)", bytes.len());
+                    crate::debug_log!("[bootstrap] cached pk loaded ({} bytes)", bytes.len());
                     return Ok(pk);
                 }
                 Err(e) => {
-                    eprintln!("[bootstrap] cached pk invalid ({}), re-downloading", e);
+                    crate::debug_log!("[bootstrap] cached pk invalid ({}), re-downloading", e);
                     let _ = std::fs::remove_file(cache_path);
                 }
             }
         }
 
-        eprintln!("[bootstrap] downloading pk from server...");
+        crate::debug_log!("[bootstrap] downloading pk from server...");
         let url = format!("{}/circuit/pk", base_url.trim_end_matches('/'));
         let resp = http.get(&url).send()?;
         if !resp.status().is_success() {
@@ -278,9 +277,9 @@ impl SpendClient {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Err(e) = std::fs::write(cache_path, &bytes) {
-            eprintln!("[bootstrap] warning: failed to cache pk: {}", e);
+            crate::debug_log!("[bootstrap] warning: failed to cache pk: {}", e);
         } else {
-            eprintln!("[bootstrap] pk cached to {}", cache_path.display());
+            crate::debug_log!("[bootstrap] pk cached to {}", cache_path.display());
         }
 
         Ok(pk)
@@ -529,26 +528,6 @@ impl SpendClient {
             smt_path_bits: Some(smt_path_bits),
         };
 
-        // ── diagnostic: dump public inputs used for proving ──
-        {
-            use ark_serialize::CanonicalSerialize as _;
-            let mut null_dbg = Vec::new();
-            nullifier.serialize_compressed(&mut null_dbg).ok();
-            let mut cm_dbg = Vec::new();
-            current_month_field.serialize_compressed(&mut cm_dbg).ok();
-            let mut root_dbg = Vec::new();
-            revocation_root.serialize_compressed(&mut root_dbg).ok();
-            let mut pk_srv_dbg = Vec::new();
-            self.server_pubkey_g1.into_affine().serialize_compressed(&mut pk_srv_dbg).ok();
-            eprintln!(
-                "[spend-client] prove: nullifier={} current_month_raw={} current_month_field={} rev_root={} pk_server={}",
-                hex::encode(&null_dbg),
-                current_month,
-                hex::encode(&cm_dbg),
-                hex::encode(&root_dbg),
-                hex::encode(&pk_srv_dbg),
-            );
-        }
 
         let proof = Groth16::<Bn254>::prove(&self.pk, circuit, rng)
             .map_err(|e| SpendClientError::Proof(format!("Groth16 prove: {}", e)))?;
@@ -694,26 +673,6 @@ impl SpendClient {
             let expiration_month_field = CircuitField::from(issued.expiration_month as u64);
             let start_month_field = CircuitField::from(issued.start_month as u64);
 
-            // ── diagnostic: dump proving inputs for batch item ──
-            if i == 0 {
-                use ark_serialize::CanonicalSerialize as _;
-                let mut null_dbg = Vec::new();
-                nullifier.serialize_compressed(&mut null_dbg).ok();
-                let mut cm_dbg = Vec::new();
-                current_month_field.serialize_compressed(&mut cm_dbg).ok();
-                let mut root_dbg = Vec::new();
-                revocation_root.serialize_compressed(&mut root_dbg).ok();
-                let mut pk_srv_dbg = Vec::new();
-                self.server_pubkey_g1.into_affine().serialize_compressed(&mut pk_srv_dbg).ok();
-                eprintln!(
-                    "[spend_batch] item[0] prove: nullifier={} current_month_raw={} current_month_field={} rev_root={} pk_server={}",
-                    hex::encode(&null_dbg),
-                    current_month,
-                    hex::encode(&cm_dbg),
-                    hex::encode(&root_dbg),
-                    hex::encode(&pk_srv_dbg),
-                );
-            }
 
             let circuit = RevocationSpendCircuit {
                 nullifier: Some(nullifier),
@@ -732,8 +691,10 @@ impl SpendClient {
                 smt_path_bits: Some(smt_path_bits.clone()),
             };
 
-            // ── diagnostic: pre-circuit checks BEFORE proving ──
-            {
+            // ── diagnostic (PERSEVERUS_DEBUG only): pre-circuit checks. Solves
+            //    the circuit a second time, so it never runs by default.
+            //    Prints only pass/fail, never values that identify the token. ──
+            if crate::debug::enabled() {
                 use ark_relations::r1cs::{ConstraintSystem, ConstraintSynthesizer};
                 use perseverus_core::dleq::dleq_verify_poseidon;
                 use perseverus_core::h2c::token_base_point;
@@ -745,7 +706,7 @@ impl SpendClient {
                     self.server_pubkey_g1.into_affine()
                         .serialize_compressed(&mut pk_buf)
                         .expect("pk serialize");
-                    eprintln!("[diag] pk_server (client): {}", hex::encode(&pk_buf));
+                    crate::debug_log!("[diag] pk_server (client): {}", hex::encode(&pk_buf));
                 }
 
                 // 1. Verify base-point derivation matches stored token
@@ -754,7 +715,7 @@ impl SpendClient {
                 );
                 let p_i_stored = G1Projective::from(token.base_point);
                 let bp_match = p_i_derived.into_affine() == p_i_stored.into_affine();
-                eprintln!("[diag] base_point match: {}", bp_match);
+                crate::debug_log!("[diag] base_point match: {}", bp_match);
 
                 // 2. Verify DLEQ proof outside circuit (pure Rust, no R1CS)
                 let g_bjj = G1Projective::generator();
@@ -762,25 +723,23 @@ impl SpendClient {
                     dleq_proof, &g_bjj, &self.server_pubkey_g1,
                     &p_i_stored, &blinded_sig,
                 );
-                eprintln!("[diag] DLEQ verify (off-circuit): {:?}", dleq_ok);
+                crate::debug_log!("[diag] DLEQ verify (off-circuit): {:?}", dleq_ok);
 
                 // 3. Check nullifier
                 let null_check = compute_nullifier(
                     &self.poseidon, issued.token_seed, pack_id_f, spend_idx_f,
                 );
-                eprintln!("[diag] nullifier match: {}", nullifier == null_check);
+                crate::debug_log!("[diag] nullifier match: {}", nullifier == null_check);
 
                 // 4. Check expiration/activation
                 let cm = current_month as u64;
-                let exp = issued.expiration_month as u64;
-                let start = issued.start_month as u64;
-                eprintln!("[diag] expiration={} >= current_month={}: {}", exp, cm, exp >= cm);
-                eprintln!("[diag] current_month={} >= start_month={}: {}", cm, start, cm >= start);
+                crate::debug_log!("[diag] pack active this month: {}",
+                    issued.start_month as u64 <= cm && cm <= issued.expiration_month as u64);
 
                 // 5. Check SMT
-                eprintln!("[diag] smt_siblings count: {}, smt_path_bits count: {}",
+                crate::debug_log!("[diag] smt_siblings count: {}, smt_path_bits count: {}",
                     smt_siblings.len(), smt_path_bits.len());
-                eprintln!("[diag] revocation_root is_zero: {}",
+                crate::debug_log!("[diag] revocation_root is_zero: {}",
                     revocation_root == CircuitField::from(0u64));
 
                 // 6. Full circuit satisfiability check
@@ -798,17 +757,17 @@ impl SpendClient {
                     dleq_s: Some(dleq_proof.response),
                     expiration_month: Some(expiration_month_field),
                     start_month: Some(start_month_field),
-                    smt_siblings: Some(smt_siblings),
-                    smt_path_bits: Some(smt_path_bits),
+                    smt_siblings: Some(smt_siblings.clone()),
+                    smt_path_bits: Some(smt_path_bits.clone()),
                 };
                 diag_circuit.generate_constraints(diag_cs.clone()).unwrap();
                 let satisfied = diag_cs.is_satisfied().unwrap();
                 let nc = diag_cs.num_constraints();
                 if satisfied {
-                    eprintln!("[spend_batch] ✓ circuit SATISFIED ({} constraints) — proof should verify", nc);
+                    crate::debug_log!("[spend_batch] ✓ circuit SATISFIED ({} constraints) — proof should verify", nc);
                 } else {
                     let which = diag_cs.which_is_unsatisfied().unwrap();
-                    eprintln!("[spend_batch] ✗ circuit NOT SATISFIED ({} constraints) — unsatisfied: {:?}", nc, which);
+                    crate::debug_log!("[spend_batch] ✗ circuit NOT SATISFIED ({} constraints) — unsatisfied: {:?}", nc, which);
                 }
             }
 
@@ -839,13 +798,11 @@ impl SpendClient {
             });
             let proof_ms = t_proof.elapsed().as_millis() as u64;
             BATCH_PROOF_TIMINGS_MS.lock().unwrap().push(proof_ms);
-            eprintln!("[spend_batch] proof {}/{} generated in {}ms (token #{}, pack_id={})",
-                i + 1, spend_items.len(), proof_ms,
-                spend_idx, issued.pack_id);
+            crate::debug_log!("[spend_batch] proof {}/{} generated in {}ms", i + 1, spend_items.len(), proof_ms);
         }
 
         // 3. One HTTP round trip for all proofs.
-        eprintln!("[spend_batch] sending batch of {} proofs to server", prepared.len());
+        crate::debug_log!("[spend_batch] sending batch of {} proofs to server", prepared.len());
         let t_http = std::time::Instant::now();
         let batch_body = BatchOprfRequestWire {
             requests: prepared.iter().map(|p| OprfRequestWire {
@@ -871,7 +828,7 @@ impl SpendClient {
             .timeout(Duration::from_secs(60))
             .json(&body_json)
             .send()?;
-        eprintln!("[spend_batch] server responded in {}ms (status={})",
+        crate::debug_log!("[spend_batch] server responded in {}ms (status={})",
             t_http.elapsed().as_millis(), resp.status().as_u16());
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -923,7 +880,7 @@ impl SpendClient {
         for (i, entry) in batch_resp.responses.into_iter().enumerate() {
             if !entry.ok {
                 let err_msg = entry.error.unwrap_or_else(|| "unknown batch error".into());
-                eprintln!("[spend_batch] entry {} rejected: {}", i, err_msg);
+                crate::debug_log!("[spend_batch] entry {} rejected: {}", i, err_msg);
                 results.push(Err(SpendClientError::BadResponse(err_msg)));
                 continue;
             }

@@ -49,5 +49,6 @@ These are honest edges of the current version, in rough order of importance.
 - Keep `decoysPerInput >= 8`.
 - Pin `expectedServerPubkey`.
 - Bundle `pk.bin` and verify its hash.
+- Don't set `PERSEVERUS_DEBUG` in release builds. The SDK prints nothing by default; with it set, it prints progress and timing to stderr (never txids, tags, heights, pack ids or nullifiers), which on a phone lands in the system log.
 - Store `dataDir` like the wallet's own secrets.
 - Don't share one token store across devices.

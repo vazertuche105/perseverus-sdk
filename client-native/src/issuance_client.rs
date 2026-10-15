@@ -265,7 +265,7 @@ impl IssuanceClient {
         match fetch() {
             Ok(slots) => slots.into_iter().collect(),
             Err(e) => {
-                eprintln!(
+                crate::debug_log!(
                     "[perseverus] /board/slots unavailable ({e}); \
                      proceeding with un-checked random pack_id"
                 );

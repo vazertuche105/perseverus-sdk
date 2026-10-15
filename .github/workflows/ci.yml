@@ -15,6 +15,9 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Check bundled proving key
+        shell: bash
+        run: cd assets/circuit-v10 && shasum -a 256 -c pk.bin.sha256
       - name: Test
         run: cargo test --workspace --release
       - name: Generate Kotlin bindings

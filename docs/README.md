@@ -30,7 +30,7 @@ The machine-readable contract lives in [`blueberry-v1/`](blueberry-v1/):
 | Production server | `http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion` (Tor only) |
 | Server OPRF public key (pin this) | `dc03c12db41ba08872513309b777f2375e35215ea46ba5efd8c4a4542c13560b` |
 | API version | `1.x` (`GET /v1/meta` → `api_version`) |
-| Spend circuit | `v10`. The proving key file is `pk.bin` (4,133,200 bytes), SHA-256 `ca79225709f48f20ab00549d51d6876e91a383047b13083846e85d326f8b909b`. You ship it inside your app; Perseverus provides it. |
+| Spend circuit | `v10`. The proving key file is `pk.bin` (4,133,200 bytes), SHA-256 `ca79225709f48f20ab00549d51d6876e91a383047b13083846e85d326f8b909b`. You ship it inside your app. It's in this repo at [`assets/circuit-v10/`](../assets/circuit-v10/). |
 | Kotlin package | `com.btcmedusa.perseverus` |
 | Cost of one analysis | 1 token per distinct funding transaction that is graded. Ungraded or uncovered inputs are free. |
 
@@ -42,4 +42,4 @@ The machine-readable contract lives in [`blueberry-v1/`](blueberry-v1/):
 
 ## Getting help
 
-Questions, access to `pk.bin`, and anything server-side go to Perseverus Privacy Solutions (owner: Valentino Zertuche, GitHub `vazertuche105`).
+Questions and anything server-side go to Perseverus Privacy Solutions (owner: Valentino Zertuche, GitHub `vazertuche105`).

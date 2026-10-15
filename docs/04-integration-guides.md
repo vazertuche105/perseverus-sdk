@@ -28,7 +28,7 @@ The SDK asks Tor for **separate circuits** for filter downloads, token spends an
 
 ### `pk.bin`
 
-The spend proof needs the circuit's proving key. Ship it in the app (about 4 MB) and copy it to internal storage on first launch. The SDK needs a file path:
+The spend proof needs the circuit's proving key, [`assets/circuit-v10/pk.bin`](../assets/circuit-v10/) in this repo. Ship it in the app (about 4 MB) and copy it to internal storage on first launch. The SDK needs a file path:
 
 ```kotlin
 private const val PK_SHA256 = "ca79225709f48f20ab00549d51d6876e91a383047b13083846e85d326f8b909b"
@@ -44,7 +44,7 @@ fun provingKeyFile(context: Context): File {
 }
 ```
 
-When the circuit version changes (`GET /v1/meta` → `circuit.version`, currently `v10`), Perseverus will provide a new `pk.bin`. Version the file name so the old and new keys don't collide.
+When the circuit version changes (`GET /v1/meta` → `circuit.version`, currently `v10`), a new `assets/circuit-v<N>/pk.bin` will be added. Version the file name so the old and new keys don't collide.
 
 ### One instance
 

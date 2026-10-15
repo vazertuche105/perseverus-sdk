@@ -6,7 +6,7 @@ Goal: in about 15 minutes, analyse a real Bitcoin coin against the production se
 
 - **Rust** (stable, via [rustup](https://rustup.rs)).
 - **JDK 17 or newer**. Gradle comes with the sample through its wrapper.
-- **`pk.bin`**, the spend circuit's proving key, from Perseverus. Check it with `shasum -a 256 pk.bin` → `ca79225709f48f20ab00549d51d6876e91a383047b13083846e85d326f8b909b`.
+- **`pk.bin`**, the spend circuit's proving key, is already in the repo at [`assets/circuit-v10/pk.bin`](../assets/circuit-v10/), and the sample uses it automatically. Its SHA-256 is `ca79225709f48f20ab00549d51d6876e91a383047b13083846e85d326f8b909b`.
 - **Tor**, to use the production `.onion` endpoint: `brew install tor && tor` on macOS, or `apt install tor` on Linux. It listens on `127.0.0.1:9050`.
 - **Tokens:** either some in a Medusa wallet to import, or a Lightning wallet to pay a 1-token trial invoice (about $0.25).
 
@@ -18,7 +18,6 @@ cd perseverus-sdk
 cargo test -p perseverus-sdk            # quick sanity check (report parity + schema)
 cd sdk/examples/kotlin-jvm
 export MEDUSA_ENDPOINT=http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion
-export MEDUSA_PROVING_KEY=/path/to/pk.bin
 ./gradlew run --args="status"
 ```
 

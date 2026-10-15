@@ -9,8 +9,8 @@
 // Environment:
 //   MEDUSA_ENDPOINT  server URL (default: the clearnet dev server; a .onion uses Tor on 127.0.0.1:9050)
 //   MEDUSA_DATA_DIR  where this sample keeps its tokens (default: ~/.perseverus-sample)
-//   MEDUSA_PROVING_KEY  path to the circuit's pk.bin (default: the copy bundled in a
-//                    sparrow-fork checkout next to this repo; the production server
+//   MEDUSA_PROVING_KEY  path to the circuit's pk.bin (default: the repo's
+//                    assets/circuit-v10/pk.bin; the production server
 //                    doesn't serve it)
 
 package com.btcmedusa.sample
@@ -32,16 +32,16 @@ import java.net.URI
 import kotlin.system.exitProcess
 
 private const val DEFAULT_ENDPOINT = "http://178.105.65.132:3030"
+private const val BUNDLED_PK = "../../../assets/circuit-v10/pk.bin"
 
 fun main(args: Array<String>) {
     val endpoint = System.getenv("MEDUSA_ENDPOINT") ?: DEFAULT_ENDPOINT
     val dataDir = System.getenv("MEDUSA_DATA_DIR") ?: File(System.getProperty("user.home"), ".perseverus-sample").path
     val transport = if (endpoint.contains(".onion")) Transport.Tor(socksProxy = null) else Transport.Direct
     // Real wallets ship pk.bin inside the app. Gradle runs this from
-    // sdk/examples/kotlin-jvm, so ../../../../ is the folder holding the repos.
+    // sdk/examples/kotlin-jvm, so ../../../ is the repo root.
     val provingKey = System.getenv("MEDUSA_PROVING_KEY")
-        ?: File("../../../../sparrow-fork/src/main/resources/com/sparrowwallet/perseverus/pk.bin")
-            .takeIf { it.exists() }?.canonicalPath
+        ?: File(BUNDLED_PK).takeIf { it.exists() }?.canonicalPath
 
     try {
         val medusa = Perseverus.connect(Config(endpoint = endpoint, dataDir = dataDir, transport = transport, expectedServerPubkey = null, provingKeyPath = provingKey))
@@ -79,7 +79,7 @@ private fun status(medusa: Perseverus, endpoint: String, dataDir: String) {
     println("oprf pubkey   ${medusa.serverPubkey()}")
     println("epoch month   ${medusa.currentMonth()}")
     println("data dir      $dataDir")
-    println("proving key   ${System.getenv("MEDUSA_PROVING_KEY") ?: File("../../../../sparrow-fork/src/main/resources/com/sparrowwallet/perseverus/pk.bin").takeIf { it.exists() }?.canonicalPath ?: "(none: will try the server)"}")
+    println("proving key   ${System.getenv("MEDUSA_PROVING_KEY") ?: File(BUNDLED_PK).takeIf { it.exists() }?.canonicalPath ?: "(none: will try the server)"}")
     println("balance       ${medusa.tokenBalance()} tokens")
     for (p in medusa.listPacks()) {
         val state = if (p.active) "active" else "inactive"

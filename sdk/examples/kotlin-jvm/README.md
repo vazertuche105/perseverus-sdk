@@ -20,4 +20,4 @@ The `txid` is the funding transaction in normal explorer order, and `height` is 
 
 By default the app talks to the dev server over clearnet. Set `MEDUSA_ENDPOINT` to the `.onion` address to go through Tor; a Tor daemon must be running on 127.0.0.1:9050. Tokens are kept in `~/.perseverus-sample`, which you can change with `MEDUSA_DATA_DIR`.
 
-`analyze` needs the circuit's proving key (`pk.bin`, about 4 MB), which the production server doesn't serve. By default the app uses the copy bundled in a `sparrow-fork` checkout next to this repo. To use a different copy, set `MEDUSA_PROVING_KEY=/path/to/pk.bin`.
+`analyze` needs the circuit's proving key (`pk.bin`, about 4 MB), which the production server doesn't serve. By default the app uses the repo's copy in `assets/circuit-v10/pk.bin`. To use a different copy, set `MEDUSA_PROVING_KEY=/path/to/pk.bin`.

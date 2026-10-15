@@ -99,4 +99,4 @@ cargo ndk ... build --release -p perseverus-sdk --lib --features rustls
 
 - Pin a commit or tag of this repository and rebuild when you update. Bindings and the native library must come from the **same** commit, because a mismatch fails at load time with a checksum error.
 - The server announces `min_client_version` in `GET /v1/meta`. An SDK older than that throws `Unsupported` at `connect`.
-- When the circuit version changes (`circuit.version` in `/v1/meta`), you'll also get a new `pk.bin`.
+- When the circuit version changes (`circuit.version` in `/v1/meta`), a new `assets/circuit-v<N>/pk.bin` will be added; bundle the one that matches.

@@ -208,8 +208,10 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
     let mut tags: HashMap<usize, Result<u32, (String, String, bool)>> = HashMap::new();
     let mut tokens_spent = 0u32;
     if !matched.is_empty() {
-        let reservations = ctx.store.reserve(matched.len(), ctx.current_month)?;
+        // Set up the prover BEFORE reserving tokens: if this fails (bad or
+        // missing proving key, network), no token has been marked used.
         let spend = (ctx.spend)()?;
+        let reservations = ctx.store.reserve(matched.len(), ctx.current_month)?;
         let cb = codebook.as_ref().expect("codebook loaded when anything matched");
         let mut released: Vec<(u64, usize)> = Vec::new();
 

@@ -98,6 +98,8 @@ impl From<ark_serialize::SerializationError> for SpendClientError {
 #[derive(Debug, Serialize, Deserialize)]
 struct RevocationRootResponseWire {
     revocation_root_hex: String,
+    /// Legacy only; `/v1` doesn't send it.
+    #[serde(default)]
     tree_size: usize,
 }
 
@@ -162,6 +164,8 @@ pub struct SpendClient {
     poseidon: PoseidonConfig<PoseidonField>,
     pk: ProvingKey<Bn254>,
     server_pubkey_g1: G1Projective,
+    /// "" for the legacy routes (Sparrow), "/v1" for the versioned API.
+    api_prefix: &'static str,
 }
 
 impl std::fmt::Debug for SpendClient {
@@ -189,7 +193,15 @@ impl SpendClient {
             poseidon: perseverus_core::poseidon::poseidon_config(),
             pk,
             server_pubkey_g1,
+            api_prefix: "",
         }
+    }
+
+    /// Use the versioned `/v1` API (revocation and `/v1/analyze/batch`).
+    /// Legacy routes stay the default for Sparrow.
+    pub fn with_v1(mut self) -> Self {
+        self.api_prefix = "/v1";
+        self
     }
 
     /// Replace the HTTP client.
@@ -302,6 +314,7 @@ impl SpendClient {
             poseidon: perseverus_core::poseidon::poseidon_config(),
             pk,
             server_pubkey_g1,
+            api_prefix: "",
         })
     }
 
@@ -321,6 +334,7 @@ impl SpendClient {
             poseidon: perseverus_core::poseidon::poseidon_config(),
             pk,
             server_pubkey_g1,
+            api_prefix: "",
         })
     }
 
@@ -340,12 +354,13 @@ impl SpendClient {
             poseidon: perseverus_core::poseidon::poseidon_config(),
             pk,
             server_pubkey_g1,
+            api_prefix: "",
         })
     }
 
     /// Fetch the current revocation tree root from the server.
     pub fn fetch_revocation_root(&self) -> Result<(PoseidonField, usize), SpendClientError> {
-        let url = format!("{}/revocation/root", self.base_url);
+        let url = format!("{}{}/revocation/root", self.base_url, self.api_prefix);
         let resp = self.http.get(&url).send()?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -363,7 +378,7 @@ impl SpendClient {
         &self,
         pack_id: u64,
     ) -> Result<(Vec<PoseidonField>, Vec<bool>), SpendClientError> {
-        let url = format!("{}/revocation/proof/{}", self.base_url, pack_id);
+        let url = format!("{}{}/revocation/proof/{}", self.base_url, self.api_prefix, pack_id);
         let resp = self.http.get(&url).send()?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -767,10 +782,23 @@ impl SpendClient {
                 spend: p.request.spend.clone(),
             }).collect(),
         };
-        let url = format!("{}/oprf/evaluate/batch", self.base_url);
+        let (url, body_json) = if self.api_prefix == "/v1" {
+            // /v1 shape: one blinded point per entry.
+            let reqs: Vec<serde_json::Value> = batch_body
+                .requests
+                .iter()
+                .map(|r| serde_json::json!({ "blinded_point": r.blinded_points[0], "spend": r.spend }))
+                .collect();
+            (format!("{}/v1/analyze/batch", self.base_url), serde_json::json!({ "requests": reqs }))
+        } else {
+            (
+                format!("{}/oprf/evaluate/batch", self.base_url),
+                serde_json::to_value(&batch_body).map_err(|e| SpendClientError::BadResponse(e.to_string()))?,
+            )
+        };
         let resp = self.http.post(&url)
             .timeout(Duration::from_secs(60))
-            .json(&batch_body)
+            .json(&body_json)
             .send()?;
         eprintln!("[spend_batch] server responded in {}ms (status={})",
             t_http.elapsed().as_millis(), resp.status().as_u16());
@@ -779,7 +807,38 @@ impl SpendClient {
             let body = resp.text().unwrap_or_default();
             return Err(SpendClientError::ServerStatus { status, body });
         }
-        let batch_resp: BatchOprfResponseWire = resp.json()?;
+        let batch_resp: BatchOprfResponseWire = if self.api_prefix == "/v1" {
+            // Normalize the /v1 response to the legacy shape so decoding below
+            // is shared. Error objects become "<code>: <message>".
+            #[derive(Deserialize)]
+            struct V1Err { code: String, message: String }
+            #[derive(Deserialize)]
+            struct V1Entry {
+                ok: bool,
+                evaluated_point: Option<String>,
+                proof_challenge: Option<String>,
+                proof_response: Option<String>,
+                error: Option<V1Err>,
+            }
+            #[derive(Deserialize)]
+            struct V1Resp { responses: Vec<V1Entry> }
+            let v: V1Resp = resp.json()?;
+            BatchOprfResponseWire {
+                responses: v
+                    .responses
+                    .into_iter()
+                    .map(|e| BatchOprfEntryWire {
+                        ok: e.ok,
+                        evaluated_points: e.evaluated_point.map(|p| vec![p]),
+                        proof_challenge: e.proof_challenge,
+                        proof_response: e.proof_response,
+                        error: e.error.map(|x| format!("{}: {}", x.code, x.message)),
+                    })
+                    .collect(),
+            }
+        } else {
+            resp.json()?
+        };
 
         if batch_resp.responses.len() != prepared.len() {
             return Err(SpendClientError::BadResponse(format!(

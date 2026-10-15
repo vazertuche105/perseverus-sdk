@@ -148,6 +148,8 @@ struct ExistsResponse {
 pub struct QueryClient {
     http: reqwest::blocking::Client,
     base_url: String,
+    /// "" for the legacy routes (Sparrow), "/v1" for the versioned API.
+    api_prefix: &'static str,
 }
 
 /// Result of a batch filter download: the filters we got + heights
@@ -178,13 +180,20 @@ impl QueryClient {
         } else {
             reqwest::blocking::Client::new()
         };
-        Self { http, base_url }
+        Self { http, base_url, api_prefix: "" }
     }
 
     /// Replace the HTTP client — useful for routing through a Tor
     /// SOCKS5 proxy or injecting a custom timeout / TLS config.
     pub fn with_http(mut self, http: reqwest::blocking::Client) -> Self {
         self.http = http;
+        self
+    }
+
+    /// Use the versioned `/v1` API for filter batches and the codebook.
+    /// Legacy routes stay the default for Sparrow.
+    pub fn with_v1(mut self) -> Self {
+        self.api_prefix = "/v1";
         self
     }
 
@@ -262,7 +271,7 @@ impl QueryClient {
         struct CodebookResp { codebook_hex: String, #[allow(dead_code)] len: usize }
 
         let resp = self.http
-            .get(format!("{}/codebook", self.base_url))
+            .get(format!("{}{}/codebook", self.base_url, self.api_prefix))
             .send()?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -331,7 +340,7 @@ impl QueryClient {
         struct Resp { filters: Vec<FilterEntry>, missing: Vec<u32> }
 
         let mut resp = self.http
-            .post(format!("{}/filters/batch", self.base_url))
+            .post(format!("{}{}/filters/batch", self.base_url, self.api_prefix))
             .json(&Req { heights: heights.to_vec() })
             .send()?
             .error_for_status()?;

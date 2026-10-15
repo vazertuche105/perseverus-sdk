@@ -36,10 +36,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ark_ec::CurveGroup;
 use ark_ed_on_bn254::EdwardsProjective;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use perseverus_client_native::issuance_client::V1Credential;
 use perseverus_client_native::{transport, IssuanceClient, QueryClient, SpendClient};
 use perseverus_core::poseidon::{poseidon_config, poseidon_hash_many, PoseidonField};
 use rand::rngs::OsRng;
-use rand::RngCore;
 use serde::Deserialize;
 
 pub use analyze::{AnalysisResult, AnalyzeOptions};
@@ -100,6 +100,8 @@ pub enum Plan {
     Onetime,
     /// Card subscription; one 100-token pack per month.
     Monthly,
+    /// Card, paid once: 13 monthly packs (the rest of this month plus the next 12).
+    Yearly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -108,6 +110,9 @@ pub struct Purchase {
     pub purchase_id: String,
     pub method: PayMethod,
     pub plan: Plan,
+    /// Packs this purchase redeems (13 for `Yearly`, otherwise 1).
+    pub packs: u32,
+    /// Total tokens across those packs.
     pub tokens: u32,
     /// BOLT11 invoice (Lightning) or checkout URL (Card).
     pub payment_request: String,
@@ -119,6 +124,7 @@ pub struct Purchase {
 pub enum PurchaseState {
     Pending,
     Paid,
+    Redeemed,
     Expired,
 }
 
@@ -133,8 +139,6 @@ pub struct Perseverus {
     store: Store,
     query: QueryClient,
     spend: Mutex<Option<SpendClient>>,
-    /// Card redemption codes fetched by `purchase_status`, keyed by purchase id.
-    card_codes: Mutex<std::collections::HashMap<String, String>>,
 }
 
 #[uniffi::export]
@@ -160,8 +164,18 @@ impl Perseverus {
 
         let data_dir = PathBuf::from(&config.data_dir);
         let store = Store::open(&data_dir)?;
-        let query = QueryClient::new(&base_url).with_http(http_for(&base_url, false)?);
-        let server_pubkey = query.get_server_pubkey()?;
+        let query = QueryClient::new(&base_url).with_v1().with_http(http_for(&base_url, false)?);
+        let meta: Meta = get_json_at(&base_url, "/v1/meta")?;
+        if !meta.api_version.starts_with("1.") {
+            return Err(PerseverusError::Unsupported { reason: format!("server API {} is not 1.x", meta.api_version) });
+        }
+        if version_lt(env!("CARGO_PKG_VERSION"), &meta.min_client_version) {
+            return Err(PerseverusError::Unsupported {
+                reason: format!("this SDK ({}) is older than the server's minimum ({}); update it", env!("CARGO_PKG_VERSION"), meta.min_client_version),
+            });
+        }
+        let server_pubkey = parse_point_hex(&meta.server_pubkey_hex)
+            .ok_or_else(|| PerseverusError::Verification { reason: "server sent an invalid OPRF public key".into() })?;
 
         if let Some(expected) = config.expected_server_pubkey {
             let got = point_hex(&server_pubkey);
@@ -180,7 +194,6 @@ impl Perseverus {
             store,
             query,
             spend: Mutex::new(None),
-            card_codes: Mutex::new(Default::default()),
         }))
     }
 
@@ -191,12 +204,8 @@ impl Perseverus {
 
     /// Current server epoch month (YYYYMM).
     pub fn current_month(&self) -> Result<u32, PerseverusError> {
-        #[derive(Deserialize)]
-        struct Epoch {
-            month: u32,
-        }
-        let e: Epoch = self.get_json("/epoch")?;
-        Ok(e.month)
+        let m: Meta = self.get_json("/v1/meta")?;
+        Ok(m.current_month)
     }
 
     /// Unspent tokens in currently active packs. Local; no network call
@@ -211,61 +220,44 @@ impl Perseverus {
 
     /// Start a purchase. Show `payment_request` to the user (BOLT11 as a QR
     /// code, or open the checkout URL), then poll `purchase_status`.
+    ///
+    /// Lightning: `Trial` (1 token) or `Onetime` (100). Card: `Onetime`,
+    /// `Monthly` or `Yearly` (13 packs). The server sets the price.
     pub fn buy_tokens(&self, method: PayMethod, plan: Plan) -> Result<Purchase, PerseverusError> {
-        let purchase = match method {
-            PayMethod::Lightning => {
-                let (plan_str, tokens) = match plan {
-                    Plan::Trial => ("onetime", 1u32),
-                    Plan::Onetime => ("onetime", PACK_SIZE),
-                    Plan::Monthly => {
-                        return Err(PerseverusError::Unsupported { reason: "monthly plans are card-only".into() })
-                    }
-                };
-                #[derive(Deserialize)]
-                struct Inv {
-                    invoice: String,
-                    nonce: String,
-                    amount_sat: u64,
-                    tokens: u32,
-                    expires_at: u64,
-                }
-                let inv: Inv = self.post_json("/ln/invoice", &serde_json::json!({ "plan": plan_str, "tokens": tokens }), false)?;
-                Purchase {
-                    purchase_id: inv.nonce,
-                    method,
-                    plan,
-                    tokens: inv.tokens,
-                    payment_request: inv.invoice,
-                    amount_sat: Some(inv.amount_sat),
-                    expires_at: Some(inv.expires_at),
-                }
-            }
-            PayMethod::Card => {
-                let plan_str = match plan {
-                    Plan::Onetime => "onetime",
-                    Plan::Monthly => "monthly",
-                    Plan::Trial => {
-                        return Err(PerseverusError::Unsupported { reason: "the trial is Lightning-only".into() })
-                    }
-                };
-                let mut nonce = [0u8; 16];
-                OsRng.fill_bytes(&mut nonce);
-                let nonce = hex::encode(nonce);
-                #[derive(Deserialize)]
-                struct Checkout {
-                    checkout_url: String,
-                }
-                let c: Checkout = self.post_json("/stripe/checkout", &serde_json::json!({ "plan": plan_str, "nonce": nonce }), false)?;
-                Purchase {
-                    purchase_id: nonce,
-                    method,
-                    plan,
-                    tokens: PACK_SIZE,
-                    payment_request: c.checkout_url,
-                    amount_sat: None,
-                    expires_at: None,
-                }
-            }
+        #[derive(Deserialize)]
+        struct Payment {
+            kind: String,
+            bolt11: Option<String>,
+            amount_sat: Option<u64>,
+            checkout_url: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct V1Purchase {
+            purchase_id: String,
+            packs: u32,
+            tokens: u32,
+            expires_at: u64,
+            payment: Payment,
+        }
+        let p: V1Purchase = self.post_json(
+            "/v1/tokens/purchase",
+            &serde_json::json!({ "method": method_str(method), "plan": plan_str(plan) }),
+            false,
+        )?;
+        let payment_request = match p.payment.kind.as_str() {
+            "lightning" => p.payment.bolt11,
+            _ => p.payment.checkout_url,
+        }
+        .ok_or_else(|| PerseverusError::Internal { reason: "purchase response has no payment request".into() })?;
+        let purchase = Purchase {
+            purchase_id: p.purchase_id,
+            method,
+            plan,
+            packs: p.packs,
+            tokens: p.tokens,
+            payment_request,
+            amount_sat: p.payment.amount_sat,
+            expires_at: Some(p.expires_at),
         };
         self.store.add_pending_purchase(StoredPurchase {
             purchase_id: purchase.purchase_id.clone(),
@@ -277,78 +269,101 @@ impl Perseverus {
         Ok(purchase)
     }
 
+    /// Track a purchase that was started elsewhere (another device, or a
+    /// checkout opened outside the app) so it can be polled and redeemed here.
+    /// `purchase_id` is the bearer id from `POST /v1/tokens/purchase`.
+    pub fn add_purchase(&self, purchase_id: String, plan: Plan) -> Result<(), PerseverusError> {
+        let method = if purchase_id.starts_with("ln_") {
+            PayMethod::Lightning
+        } else if purchase_id.starts_with("card_") {
+            PayMethod::Card
+        } else {
+            return Err(PerseverusError::InvalidArgument { reason: "purchase_id must start with ln_ or card_".into() });
+        };
+        let tokens = match plan {
+            Plan::Trial => 1,
+            Plan::Yearly => 13 * PACK_SIZE,
+            _ => PACK_SIZE,
+        };
+        self.store.add_pending_purchase(StoredPurchase {
+            purchase_id,
+            method: method_str(method).into(),
+            plan: plan_str(plan).into(),
+            tokens,
+            created_at: now(),
+        })
+    }
+
     /// Purchases started but not yet redeemed (survive app restarts).
     pub fn pending_purchases(&self) -> Result<Vec<String>, PerseverusError> {
         Ok(self.store.pending_purchases()?.into_iter().map(|p| p.purchase_id).collect())
     }
 
+    /// Poll while the user pays: `Paid` means ready to `redeem`.
     pub fn purchase_status(&self, purchase_id: String) -> Result<PurchaseState, PerseverusError> {
+        #[derive(Deserialize)]
+        struct S {
+            state: String,
+        }
+        let s: S = self.get_json(&format!("/v1/tokens/purchase/{purchase_id}/status"))?;
+        Ok(match s.state.as_str() {
+            "paid" => PurchaseState::Paid,
+            "redeemed" => PurchaseState::Redeemed,
+            "expired" => PurchaseState::Expired,
+            _ => PurchaseState::Pending,
+        })
+    }
+
+    /// Claim a paid purchase: blind fresh tokens, have the server sign them,
+    /// unblind, and store the pack(s) locally. Returns one `PackInfo` per pack
+    /// (13 for a yearly plan). The claim goes over an isolated Tor circuit.
+    pub fn redeem(&self, purchase_id: String) -> Result<Vec<PackInfo>, PerseverusError> {
         let p = self.pending(&purchase_id)?;
-        match p.method.as_str() {
-            "lightning" => {
-                #[derive(Deserialize)]
-                struct S {
-                    paid: bool,
-                    expires_at: u64,
-                }
-                let s: S = self.get_json(&format!("/ln/status/{purchase_id}"))?;
-                Ok(if s.paid {
-                    PurchaseState::Paid
-                } else if s.expires_at < now() {
-                    PurchaseState::Expired
-                } else {
-                    PurchaseState::Pending
-                })
+        let month = self.current_month()?;
+        // (expiration_month, start_month) per pack. One pack is valid through
+        // the end of next month. Yearly: a bridge pack for the rest of this
+        // month and the next, then one pack per calendar month for 12 months
+        // (the same schedule Sparrow uses).
+        let schedule: Vec<(u32, u32)> = if p.plan == "yearly" {
+            let mut v = vec![(add_months(month, 1), month)];
+            for k in 1..=12 {
+                let m = add_months(month, 1 + k);
+                v.push((m, m));
             }
-            _ => {
-                #[derive(Deserialize)]
-                struct S {
-                    status: String,
-                    redemption_code: Option<String>,
-                }
-                let s: S = self.get_json(&format!("/stripe/status/{purchase_id}"))?;
-                match (s.status.as_str(), s.redemption_code) {
-                    ("ready", Some(code)) => {
-                        self.card_codes.lock().unwrap_or_else(|e| e.into_inner()).insert(purchase_id, code);
-                        Ok(PurchaseState::Paid)
-                    }
-                    _ => Ok(PurchaseState::Pending),
+            v
+        } else {
+            vec![(add_months(month, 1), month)]
+        };
+        let per_pack = (p.tokens as usize / schedule.len()).max(1);
+        let issuance = IssuanceClient::new(&self.base_url, self.server_pubkey)
+            .with_v1()
+            .with_http(http_for(&self.base_url, true)?);
+        let issued = issuance.redeem_v1(per_pack, &schedule, V1Credential::PurchaseId(&purchase_id), &mut OsRng)?;
+
+        // Store first: the packs are already signed, so nothing after this
+        // point may lose them.
+        let mut infos = Vec::with_capacity(issued.len());
+        for pack in &issued {
+            infos.push(self.store.add_pack(pack, &p.method, now())?);
+        }
+        self.store.remove_pending_purchase(&purchase_id)?;
+
+        // Card packs publish an attribution entry (chargeback handling), each
+        // over its own isolated circuit, as Sparrow does. A failure here
+        // doesn't affect the tokens.
+        if p.method == "card" {
+            for pack in &issued {
+                let tag = poseidon_hash_many(&poseidon_config(), &[PoseidonField::from(pack.pack_id)]);
+                if let Err(e) = issuance.publish_board_entry(pack, tag) {
+                    eprintln!("[perseverus] board publish for pack {} failed (tokens unaffected): {e}", pack.pack_id);
                 }
             }
         }
-    }
-
-    /// Claim a paid purchase: blind fresh tokens, get them signed, unblind,
-    /// and store the pack locally. The claim goes over an isolated Tor
-    /// circuit so it can't be linked to the purchase request by circuit.
-    pub fn redeem(&self, purchase_id: String) -> Result<PackInfo, PerseverusError> {
-        let p = self.pending(&purchase_id)?;
-        let month = self.current_month()?;
-        let expiration = add_months(month, 1); // valid through the end of next month
-        let issuance = IssuanceClient::new(&self.base_url, self.server_pubkey).with_http(http_for(&self.base_url, true)?);
-        let issued = match p.method.as_str() {
-            "lightning" => issuance.redeem_pack_ln(p.tokens as usize, expiration, month, &purchase_id, &mut OsRng)?,
-            _ => {
-                if self.purchase_status(purchase_id.clone())? != PurchaseState::Paid {
-                    return Err(PerseverusError::NotPaid);
-                }
-                let code = self
-                    .card_codes
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(&purchase_id)
-                    .ok_or(PerseverusError::NotPaid)?;
-                let issued = issuance.redeem_pack(p.tokens as usize, expiration, month, &code, &mut OsRng)?;
-                // Card packs publish an attribution entry (chargeback handling),
-                // over its own isolated circuit, exactly as Sparrow does.
-                let tag = poseidon_hash_many(&poseidon_config(), &[PoseidonField::from(issued.pack_id)]);
-                issuance.publish_board_entry(&issued, tag)?;
-                issued
-            }
-        };
-        let info = self.store.add_pack(&issued, &p.method, now())?;
-        self.store.remove_pending_purchase(&purchase_id)?;
-        Ok(info)
+        let month_now = month;
+        for i in &mut infos {
+            i.active = i.start_month <= month_now && month_now <= i.expiration_month;
+        }
+        Ok(infos)
     }
 
     /// Import a pack blob issued elsewhere (e.g. migrated from Sparrow, or
@@ -403,11 +418,12 @@ impl Perseverus {
                     })?;
                     let pk = ark_groth16::ProvingKey::<ark_bn254::Bn254>::deserialize_compressed(&bytes[..])
                         .map_err(|e| PerseverusError::InvalidArgument { reason: format!("proving key {path} is not a valid pk.bin: {e}") })?;
-                    SpendClient::new(&self.base_url, pk, self.server_pubkey)
+                    SpendClient::new(&self.base_url, pk, self.server_pubkey).with_v1()
                 }
                 None => {
                     let http = http_for(&self.base_url, false)?;
                     SpendClient::bootstrap_with_cache(&self.base_url, self.server_pubkey, http, &self.data_dir.join(PK_CACHE_FILE))?
+                        .with_v1()
                 }
             };
             *guard = Some(sc);
@@ -416,8 +432,7 @@ impl Perseverus {
     }
 
     fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, PerseverusError> {
-        let resp = http_for(&self.base_url, false)?.get(format!("{}{}", self.base_url, path)).send()?;
-        json_or_error(resp)
+        get_json_at(&self.base_url, path)
     }
 
     fn post_json<T: serde::de::DeserializeOwned>(&self, path: &str, body: &serde_json::Value, isolated: bool) -> Result<T, PerseverusError> {
@@ -426,13 +441,50 @@ impl Perseverus {
     }
 }
 
+/// The subset of `GET /v1/meta` the SDK uses.
+#[derive(Deserialize)]
+struct Meta {
+    api_version: String,
+    min_client_version: String,
+    server_pubkey_hex: String,
+    current_month: u32,
+}
+
+fn get_json_at<T: serde::de::DeserializeOwned>(base_url: &str, path: &str) -> Result<T, PerseverusError> {
+    let resp = http_for(base_url, false)?.get(format!("{base_url}{path}")).send()?;
+    json_or_error(resp)
+}
+
+fn parse_point_hex(h: &str) -> Option<EdwardsProjective> {
+    let b = hex::decode(h).ok()?;
+    ark_ed_on_bn254::EdwardsAffine::deserialize_compressed(&b[..]).ok().map(Into::into)
+}
+
+/// `a < b` for dotted numeric versions ("0.1.0" < "0.2").
+fn version_lt(a: &str, b: &str) -> bool {
+    let parse = |v: &str| v.split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let (mut x, mut y) = (parse(a), parse(b));
+    let n = x.len().max(y.len());
+    x.resize(n, 0);
+    y.resize(n, 0);
+    x < y
+}
+
 fn json_or_error<T: serde::de::DeserializeOwned>(resp: reqwest::blocking::Response) -> Result<T, PerseverusError> {
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().unwrap_or_default();
+        // /v1 errors are {"error":{"code","message","retryable"}}; legacy
+        // ones are {"error":"..."}.
         let message = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
-            .and_then(|v| v.get("error").and_then(|e| e.as_str().map(String::from)))
+            .and_then(|v| {
+                let e = v.get("error")?;
+                match (e.get("code").and_then(|c| c.as_str()), e.get("message").and_then(|m| m.as_str())) {
+                    (Some(c), Some(m)) => Some(format!("{c}: {m}")),
+                    _ => e.as_str().map(String::from),
+                }
+            })
             .unwrap_or(body);
         return Err(PerseverusError::Server { status: status.as_u16(), reason: message });
     }
@@ -483,12 +535,22 @@ fn plan_str(p: Plan) -> &'static str {
         Plan::Trial => "trial",
         Plan::Onetime => "onetime",
         Plan::Monthly => "monthly",
+        Plan::Yearly => "yearly",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::add_months;
+
+    #[test]
+    fn version_compare() {
+        use super::version_lt;
+        assert!(version_lt("0.1.0", "0.2.0"));
+        assert!(version_lt("0.9", "0.10.0"));
+        assert!(!version_lt("0.1.0", "0.1"));
+        assert!(!version_lt("1.0.0", "0.9.9"));
+    }
 
     #[test]
     fn month_rollover() {

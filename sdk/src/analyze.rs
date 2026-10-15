@@ -261,7 +261,7 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
                                 // same pack): it stays used. Any other per-entry
                                 // rejection happens before the burn, so the token
                                 // is still good and goes back to the pool.
-                                let burned = msg.contains("409") || msg.contains("already spent");
+                                let burned = msg.contains("nullifier_spent") || msg.contains("409") || msg.contains("already spent");
                                 if !burned {
                                     released.push((r.pack.pack_id, r.index));
                                 }

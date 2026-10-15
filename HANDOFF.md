@@ -15,7 +15,7 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 ## Status
 
 **Done and tested**
-- `sdk/` API: `connect`, `buyTokens` (Lightning trial and onetime, card onetime and monthly), `purchaseStatus`, `redeem`, `tokenBalance`, `listPacks`, `importPack`, `analyzeInputs`. Kotlin bindings live in package `com.btcmedusa.perseverus`.
+- `sdk/` API: `connect`, `buyTokens` (Lightning trial and onetime, card onetime, monthly and yearly), `addPurchase`, `purchaseStatus`, `redeem` (returns a list of packs), `tokenBalance`, `listPacks`, `importPack`, `analyzeInputs`. Kotlin bindings live in package `com.btcmedusa.perseverus`.
 - Report text is generated from `docs/blueberry-v1/findings-catalog.v3lean.json`. It matches the reference wallet's renderer exactly; the parity test covers 500 tags.
 - The full analysis pipeline has been tested end to end against a real server: decoys, local match, ungraded and not-covered inputs, one token per funding transaction, batched spend, DLEQ verification, and already-spent tokens. That test needs the private server code, so it isn't in this repo.
 - `sdk/examples/kotlin-jvm` runs on macOS (Apple silicon, JDK 25, Gradle 9.1): `status` works and `import-sparrow` imports packs.
@@ -34,15 +34,15 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 ## Next steps, in order
 
 1. ~~Verify `analyze` on a real coin.~~ Done 2026-10-14: real mainnet coin against production, grade D (peel chain), 1 token, 3.3 s.
-2. **Server `/v1` API** (done in the private server repo, contract in `docs/blueberry-v1/openapi.yaml`), then switch the SDK's paths to `/v1`.
+2. ~~Server `/v1` API, then switch the SDK to `/v1`.~~ Done 2026-10-14. The server serves `/v1` (contract: `docs/blueberry-v1/openapi.yaml`) and the SDK uses only `/v1`. The card yearly plan (13 packs) is supported.
 3. **Developer documentation** in `docs/`, written for a wallet developer who has never seen this project:
    - **SDK guide:** every function and type, with what it does, *why* it exists (including the privacy reason), when to call it, a Kotlin example, its errors and how to handle them, and what the server can and can't see.
    - **5-minute quickstart** and walkthroughs: buying tokens, pre-broadcast analysis, showing ungraded / not-covered / error results.
    - **`PrivacyReport` field guide:** every grade, status and finding explained.
-   - **HTTP `/v1` reference:** each endpoint's purpose, request and response with real examples, and errors (after step 2, so it documents the final API).
+   - **HTTP `/v1` reference:** each endpoint's purpose, request and response with real examples, and errors (the server's tests record real exchanges with `V1_EXAMPLES_DIR`).
    - **Privacy and threat model** in plain language, plus troubleshooting.
    - **Build instructions for integrators:** how to compile the SDK for Android (`cargo-ndk`) and iOS (XCFramework via `uniffi-bindgen --language swift`). Integrators build and ship the native library themselves; we don't publish binaries.
-4. **SDK features:** card yearly plan (13 packs), BTC silent-payment purchase, a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
+4. **SDK features:** BTC silent-payment purchase, a redeem retry that survives an app restart (persist the prepared blinded packs), a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
 
 **Open questions for BlueWallet:** inputs as a PSBT or as outpoints plus heights (the SDK takes outpoints plus heights today); decoy default and bandwidth budget; which block range must have filters; payment methods at launch; how the SDK is licensed and published.
 

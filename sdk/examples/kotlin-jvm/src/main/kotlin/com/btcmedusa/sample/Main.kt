@@ -132,11 +132,14 @@ private fun buyTrial(medusa: Perseverus) {
         when (medusa.purchaseStatus(p.purchaseId)) {
             PurchaseState.PAID -> break
             PurchaseState.EXPIRED -> { println("invoice expired"); return }
+            PurchaseState.REDEEMED -> { println("already redeemed"); return }
             PurchaseState.PENDING -> Thread.sleep(3_000)
         }
     }
-    val pack = medusa.redeem(p.purchaseId)
-    println("Redeemed: pack ${pack.packId} with ${pack.remaining} token(s). Balance: ${medusa.tokenBalance()}")
+    // A yearly card plan yields 13 packs; everything else yields one.
+    val packs = medusa.redeem(p.purchaseId)
+    for (pack in packs) println("Redeemed: pack ${pack.packId} with ${pack.remaining} token(s), ${pack.startMonth}–${pack.expirationMonth}")
+    println("Balance: ${medusa.tokenBalance()}")
 }
 
 private fun analyze(medusa: Perseverus, args: List<String>) {

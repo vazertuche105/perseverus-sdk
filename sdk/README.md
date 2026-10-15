@@ -6,9 +6,11 @@ The wallet SDK for BTC Medusa. It lets a wallet buy anonymous token packs and th
 
 | Kotlin | What it does |
 |---|---|
-| `Perseverus.connect(Config)` | Sets up the transport, opens local storage and fetches the server's OPRF key. Optionally pins that key. Set `provingKeyPath` to the `pk.bin` bundled with your app; the production server doesn't serve it. |
-| `buyTokens(method, plan)` → `Purchase` | Starts a Lightning (trial or onetime) or card (onetime or monthly) purchase. Show the user `paymentRequest`. |
-| `purchaseStatus(id)` / `redeem(id)` | Polls the payment, then blinds tokens, gets them signed and unblinds them. The claim goes out on its own Tor circuit. |
+| `Perseverus.connect(Config)` | Sets up the transport, opens local storage and reads `GET /v1/meta` (API version, OPRF key, current epoch month). Refuses a server whose API major version differs or that needs a newer SDK. Optionally pins the OPRF key. Set `provingKeyPath` to the `pk.bin` bundled with your app; the production server doesn't serve it. |
+| `buyTokens(method, plan)` → `Purchase` | Starts a Lightning (trial or onetime) or card (onetime, monthly or yearly) purchase via `POST /v1/tokens/purchase`. Show the user `paymentRequest`. The server sets the price. |
+| `addPurchase(id, plan)` | Records a purchase made outside the SDK (e.g. a card checkout finished in a browser) so it can be redeemed. |
+| `purchaseStatus(id)` → `PENDING`/`PAID`/`REDEEMED`/`EXPIRED` | Polls `GET /v1/tokens/purchase/{id}/status`. |
+| `redeem(id)` → `List<PackInfo>` | Blinds tokens, gets them signed via `POST /v1/tokens/redeem` and unblinds them. One pack for most plans; a yearly card plan returns 13 (this month plus the next 12). The claim goes out on its own Tor circuit. |
 | `tokenBalance()` / `listPacks()` | Local only. The server never learns balances. |
 | `importPack(blob, method)` | Adds a pack blob in Sparrow's format, e.g. migrated from Sparrow or restored from a backup. |
 | `analyzeInputs(inputs, AnalyzeOptions)` → `AnalysisResult` | The pre-broadcast call. Returns one `PrivacyReport` per input. |
@@ -22,6 +24,10 @@ The wallet SDK for BTC Medusa. It lets a wallet buy anonymous token packs and th
 All finding text comes from `docs/blueberry-v1/findings-catalog.v3lean.json`. That file is compiled into the SDK, so Sparrow and the SDK show the same wording.
 
 Every call **blocks**, so run them off the main thread.
+
+Errors from the server arrive as `PerseverusException` with `reason` set to `"<code>: <message>"`, where `<code>` is the stable `/v1` error code (`nullifier_spent`, `payment_required`, `upstream_unavailable`, …; see `docs/blueberry-v1/openapi.yaml`). Match on the code, not the message.
+
+The SDK talks only to the `/v1` API.
 
 ## How `analyzeInputs` protects the user
 

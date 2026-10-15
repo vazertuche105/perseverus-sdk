@@ -177,6 +177,17 @@ pub struct IssuanceClient {
     http: reqwest::blocking::Client,
     poseidon: PoseidonConfig<PoseidonField>,
     server_pubkey: G1Projective,
+    /// "" for the legacy routes (Sparrow), "/v1" for the versioned API.
+    api_prefix: &'static str,
+}
+
+/// Credential for `POST /v1/tokens/redeem`.
+#[derive(Debug, Clone, Copy)]
+pub enum V1Credential<'a> {
+    /// `purchase_id` from `POST /v1/tokens/purchase` (Lightning or card).
+    PurchaseId(&'a str),
+    /// `psbtc1.…` code from the silent-payment scanner.
+    BtcCode(&'a str),
 }
 
 impl IssuanceClient {
@@ -197,6 +208,7 @@ impl IssuanceClient {
                 .expect("default blocking client must build"),
             poseidon: perseverus_core::poseidon::poseidon_config(),
             server_pubkey,
+            api_prefix: "",
         }
     }
 
@@ -204,6 +216,13 @@ impl IssuanceClient {
     /// tuned timeout.
     pub fn with_http(mut self, http: reqwest::blocking::Client) -> Self {
         self.http = http;
+        self
+    }
+
+    /// Use the versioned `/v1` API for board and redeem calls
+    /// (`redeem_v1`). Legacy routes stay the default for Sparrow.
+    pub fn with_v1(mut self) -> Self {
+        self.api_prefix = "/v1";
         self
     }
 
@@ -224,7 +243,7 @@ impl IssuanceClient {
     /// the previous random-pack_id behavior; the server's 409 on
     /// `/board/publish` remains the backstop.
     fn fetch_occupied_slots_or_empty(&self) -> std::collections::HashSet<u16> {
-        let url = format!("{}/board/slots", self.base_url);
+        let url = format!("{}{}/board/slots", self.base_url, self.api_prefix);
         let fetch = || -> Result<Vec<u16>, IssuanceClientError> {
             let resp = self.http.get(&url).send()?;
             if !resp.status().is_success() {
@@ -366,7 +385,7 @@ impl IssuanceClient {
             tag_hex: hex::encode(&tag_buf),
             expiration_month: issued.expiration_month,
         };
-        let url = format!("{}/board/publish", self.base_url);
+        let url = format!("{}{}/board/publish", self.base_url, self.api_prefix);
 
         // Build an isolated client — a different Tor circuit than issue_pack,
         // so the server can't correlate issuance with board-publish. For a
@@ -583,15 +602,51 @@ impl IssuanceClient {
         Ok(issued)
     }
 
+    /// Redeem a paid purchase through `POST /v1/tokens/redeem`: one pack per
+    /// entry of `schedule` (`(expiration_month, start_month)`), `n` tokens
+    /// each. Use one entry for every plan except the card yearly plan (13).
+    pub fn redeem_v1<R: Rng>(
+        &self,
+        n: usize,
+        schedule: &[(u32, u32)],
+        credential: V1Credential<'_>,
+        rng: &mut R,
+    ) -> Result<Vec<IssuedPack>, IssuanceClientError> {
+        if schedule.is_empty() {
+            return Err(IssuanceClientError::Crypto(PerseverusError::SerializationError("empty pack schedule".into())));
+        }
+        if n == 0 || n > MAX_TOKENS_PER_PACK {
+            return Err(IssuanceClientError::Crypto(PerseverusError::SerializationError(format!(
+                "pack size {} out of range [1, {}]",
+                n, MAX_TOKENS_PER_PACK
+            ))));
+        }
+        let mut occupied = self.fetch_occupied_slots_or_empty();
+        let mut prepared: Vec<(PackRequest, PackSecrets)> = Vec::with_capacity(schedule.len());
+        for _ in 0..schedule.len() {
+            prepared.push(self.prepare_with_unique_slot(n, rng, &mut occupied)?);
+        }
+        let mut body = serde_json::json!({ "packs": Self::packs_wire(&prepared)? });
+        match credential {
+            V1Credential::PurchaseId(id) => body["purchase_id"] = id.into(),
+            V1Credential::BtcCode(code) => body["btc_code"] = code.into(),
+        }
+        let url = format!("{}/v1/tokens/redeem", self.base_url);
+        let responses = self.post_packs(&url, &body, &prepared)?;
+        let mut issued = Vec::with_capacity(prepared.len());
+        for (i, (request, secrets)) in prepared.iter().enumerate() {
+            let (expiration_month, start_month) = schedule[i];
+            issued.push(finalize_pack(
+                &self.poseidon, request, secrets, &responses[i],
+                &self.server_pubkey, expiration_month, start_month, rng,
+            )?);
+        }
+        Ok(issued)
+    }
+
     // ── Internals ──
 
-    /// POST all packs' blinded points + the code to `/stripe/redeem-batch`,
-    /// decode one `PackResponse` per pack.
-    fn post_redeem_batch(
-        &self,
-        prepared: &[(PackRequest, PackSecrets)],
-        redemption_code: &str,
-    ) -> Result<Vec<PackResponse>, IssuanceClientError> {
+    fn packs_wire(prepared: &[(PackRequest, PackSecrets)]) -> Result<Vec<PackBlindedWire>, IssuanceClientError> {
         let mut packs_wire = Vec::with_capacity(prepared.len());
         for (request, secrets) in prepared {
             let mut alphas_hex = Vec::with_capacity(request.alphas.len());
@@ -608,13 +663,34 @@ impl IssuanceClient {
             }
             packs_wire.push(PackBlindedWire { alphas: alphas_hex, base_points: base_points_hex });
         }
+        Ok(packs_wire)
+    }
 
-        let wire = RedeemBatchRequestWire {
+    /// POST all packs' blinded points + the code to `/stripe/redeem-batch`,
+    /// decode one `PackResponse` per pack.
+    fn post_redeem_batch(
+        &self,
+        prepared: &[(PackRequest, PackSecrets)],
+        redemption_code: &str,
+    ) -> Result<Vec<PackResponse>, IssuanceClientError> {
+        let wire = serde_json::to_value(RedeemBatchRequestWire {
             redemption_code: redemption_code.to_string(),
-            packs: packs_wire,
-        };
+            packs: Self::packs_wire(prepared)?,
+        })
+        .map_err(|e| IssuanceClientError::Transport(e.to_string()))?;
         let url = format!("{}/stripe/redeem-batch", self.base_url);
-        let http_resp = self.http.post(&url).json(&wire).send()?;
+        self.post_packs(&url, &wire, prepared)
+    }
+
+    /// POST `body` and decode a `{"packs": [...]}` response, one
+    /// `PackResponse` per prepared pack (shared by legacy batch and /v1).
+    fn post_packs(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        prepared: &[(PackRequest, PackSecrets)],
+    ) -> Result<Vec<PackResponse>, IssuanceClientError> {
+        let http_resp = self.http.post(url).json(body).send()?;
         if !http_resp.status().is_success() {
             let status = http_resp.status().as_u16();
             let body = http_resp.text().unwrap_or_default();
@@ -622,6 +698,9 @@ impl IssuanceClient {
         }
 
         let resp_wire: RedeemBatchResponseWire = http_resp.json()?;
+        if resp_wire.packs.len() != prepared.len() {
+            return Err(IssuanceClientError::Crypto(PerseverusError::BatchedDleqVerificationFailed));
+        }
         let mut out = Vec::with_capacity(resp_wire.packs.len());
         for (pi, w) in resp_wire.packs.iter().enumerate() {
             let expected = prepared[pi].0.alphas.len();

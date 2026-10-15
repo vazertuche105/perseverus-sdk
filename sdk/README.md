@@ -6,7 +6,7 @@ The wallet SDK for BTC Medusa. It lets a wallet buy anonymous token packs and th
 
 | Kotlin | What it does |
 |---|---|
-| `Perseverus.connect(Config)` | Sets up the transport, opens local storage and fetches the server's OPRF key. Optionally pins that key. |
+| `Perseverus.connect(Config)` | Sets up the transport, opens local storage and fetches the server's OPRF key. Optionally pins that key. Set `provingKeyPath` to the `pk.bin` bundled with your app; the production server doesn't serve it. |
 | `buyTokens(method, plan)` → `Purchase` | Starts a Lightning (trial or onetime) or card (onetime or monthly) purchase. Show the user `paymentRequest`. |
 | `purchaseStatus(id)` / `redeem(id)` | Polls the payment, then blinds tokens, gets them signed and unblinds them. The claim goes out on its own Tor circuit. |
 | `tokenBalance()` / `listPacks()` | Local only. The server never learns balances. |

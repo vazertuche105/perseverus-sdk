@@ -19,3 +19,5 @@ The first run builds the Rust library in release mode, generates the Kotlin bind
 The `txid` is the funding transaction in normal explorer order, and `height` is the block it confirmed in. Sparrow's UTXOs tab shows both.
 
 By default the app talks to the dev server over clearnet. Set `MEDUSA_ENDPOINT` to the `.onion` address to go through Tor; a Tor daemon must be running on 127.0.0.1:9050. Tokens are kept in `~/.perseverus-sample`, which you can change with `MEDUSA_DATA_DIR`.
+
+`analyze` needs the circuit's proving key (`pk.bin`, about 4 MB), which the production server doesn't serve. By default the app uses the copy bundled in a `sparrow-fork` checkout next to this repo. To use a different copy, set `MEDUSA_PROVING_KEY=/path/to/pk.bin`.

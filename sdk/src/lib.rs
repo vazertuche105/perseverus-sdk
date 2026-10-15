@@ -15,6 +15,7 @@
 //!     dataDir = context.filesDir.path,
 //!     transport = Transport.Tor(socksProxy = null),   // socks5h://127.0.0.1:9050
 //!     expectedServerPubkey = null,
+//!     provingKeyPath = bundledPkPath,                // pk.bin shipped with the app
 //! ))
 //! val p = medusa.buyTokens(PayMethod.LIGHTNING, Plan.ONETIME)   // show p.paymentRequest
 //! if (medusa.purchaseStatus(p.purchaseId) == PurchaseState.PAID) medusa.redeem(p.purchaseId)
@@ -34,7 +35,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ark_ec::CurveGroup;
 use ark_ed_on_bn254::EdwardsProjective;
-use ark_serialize::CanonicalSerialize;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use perseverus_client_native::{transport, IssuanceClient, QueryClient, SpendClient};
 use perseverus_core::poseidon::{poseidon_config, poseidon_hash_many, PoseidonField};
 use rand::rngs::OsRng;
@@ -75,6 +76,12 @@ pub struct Config {
     /// Optional pinned OPRF public key (hex). If set, `connect` refuses a
     /// server presenting a different key.
     pub expected_server_pubkey: Option<String>,
+    /// Path to the Groth16 proving key (`pk.bin`, ~4 MB) shipped with the app.
+    /// Wallets should bundle it, as Sparrow does: production servers don't
+    /// serve it, and a key downloaded from the server could be swapped by a
+    /// malicious server. If `None`, the SDK falls back to `GET /circuit/pk`
+    /// and caches the result in `data_dir`.
+    pub proving_key_path: Option<String>,
 }
 
 // ─── Purchases ───────────────────────────────────────────────────────
@@ -121,6 +128,7 @@ pub enum PurchaseState {
 pub struct Perseverus {
     base_url: String,
     data_dir: PathBuf,
+    proving_key_path: Option<String>,
     server_pubkey: EdwardsProjective,
     store: Store,
     query: QueryClient,
@@ -167,6 +175,7 @@ impl Perseverus {
         Ok(Arc::new(Self {
             base_url,
             data_dir,
+            proving_key_path: config.proving_key_path,
             server_pubkey,
             store,
             query,
@@ -387,8 +396,20 @@ impl Perseverus {
     fn spend_client(&self) -> Result<SpendClient, PerseverusError> {
         let mut guard = self.spend.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
-            let http = http_for(&self.base_url, false)?;
-            let sc = SpendClient::bootstrap_with_cache(&self.base_url, self.server_pubkey, http, &self.data_dir.join(PK_CACHE_FILE))?;
+            let sc = match &self.proving_key_path {
+                Some(path) => {
+                    let bytes = std::fs::read(path).map_err(|e| PerseverusError::InvalidArgument {
+                        reason: format!("proving key {path}: {e}"),
+                    })?;
+                    let pk = ark_groth16::ProvingKey::<ark_bn254::Bn254>::deserialize_compressed(&bytes[..])
+                        .map_err(|e| PerseverusError::InvalidArgument { reason: format!("proving key {path} is not a valid pk.bin: {e}") })?;
+                    SpendClient::new(&self.base_url, pk, self.server_pubkey)
+                }
+                None => {
+                    let http = http_for(&self.base_url, false)?;
+                    SpendClient::bootstrap_with_cache(&self.base_url, self.server_pubkey, http, &self.data_dir.join(PK_CACHE_FILE))?
+                }
+            };
             *guard = Some(sc);
         }
         Ok(guard.as_ref().unwrap().clone().with_http(http_for(&self.base_url, true)?))

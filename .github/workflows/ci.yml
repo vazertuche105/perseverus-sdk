@@ -38,9 +38,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-ndk --locked
       - name: Build
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
-        run: scripts/build-android.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          # The runner image provides the NDK path as a shell variable (not in the `env` context).
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          scripts/build-android.sh 2>&1 | tee build.log || {
+            # Surface the end of the log as an annotation (readable from the checks API).
+            echo "::error title=build failed::$(tail -n 40 build.log | awk '{gsub(/%/,"%25"); gsub(/\r/,""); printf "%s%%0A", $0}')"
+            exit 1
+          }
 
   ios:
     name: ios build
@@ -50,4 +57,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: scripts/build-ios.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          scripts/build-ios.sh 2>&1 | tee build.log || {
+            # Surface the end of the log as an annotation (readable from the checks API).
+            echo "::error title=build failed::$(tail -n 40 build.log | awk '{gsub(/%/,"%25"); gsub(/\r/,""); printf "%s%%0A", $0}')"
+            exit 1
+          }

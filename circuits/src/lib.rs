@@ -677,7 +677,6 @@ mod tests {
 
     /// Valid proof with a non-empty revocation tree (other packs revoked, but not ours).
     #[test]
-    #[ignore]
     fn valid_with_other_packs_revoked() {
         let mut rng = ark_std::test_rng();
         let v = ark_ed_on_bn254::Fr::rand(&mut rng);
@@ -872,7 +871,6 @@ mod tests {
     /// empty-leaf path bits must be rejected. Before v10 this would pass
     /// because path bits were unconstrained witnesses.
     #[test]
-    #[ignore]
     fn revoked_pack_wrong_path_rejected() {
         let mut rng = ark_std::test_rng();
         let v = ark_ed_on_bn254::Fr::rand(&mut rng);

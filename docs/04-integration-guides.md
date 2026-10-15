@@ -138,7 +138,7 @@ suspend fun buyWithCard(plan: Plan) {                // ONETIME, MONTHLY or YEAR
 Things to know about cards:
 - The checkout opens in a browser. **Stripe sees the user's IP and card details**, as with any card payment. The Medusa server sees only that a checkout was paid, and nothing about the tokens (see [Privacy model](07-privacy-model.md)).
 - **Yearly** stores 13 packs at once. Only the current one is active; one more becomes active each month, so `tokenBalance` counts only the active pack.
-- Card packs can be **revoked** if the payment is charged back. A revoked pack's tokens stop working.
+- Card packs can be **revoked** if the payment is charged back. A revoked pack's tokens stop working; `listPacks()` shows it with `revoked = true`. The SDK detects this on the device, from the public revocation list.
 
 ### Resume at startup
 

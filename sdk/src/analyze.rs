@@ -211,6 +211,18 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
         // Set up the prover BEFORE reserving tokens: if this fails (bad or
         // missing proving key, network), no token has been marked used.
         let spend = (ctx.spend)()?;
+        // Download the public revocation list (the same for every wallet)
+        // and check our own packs against it on the device, so revoked
+        // packs are never reserved and no pack_id is ever sent.
+        let revocation = spend.fetch_revocation_tree().map_err(PerseverusError::from)?;
+        let newly_revoked: Vec<u64> = ctx
+            .store
+            .packs(ctx.current_month)?
+            .iter()
+            .filter(|p| !p.revoked && spend.is_pack_revoked(&revocation.0, p.pack_id))
+            .map(|p| p.pack_id)
+            .collect();
+        ctx.store.mark_revoked(&newly_revoked)?;
         let reservations = ctx.store.reserve(matched.len(), ctx.current_month)?;
         let cb = codebook.as_ref().expect("codebook loaded when anything matched");
         let mut released: Vec<(u64, usize)> = Vec::new();
@@ -229,7 +241,7 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
                 .map(|(r, t)| (&r.pack, r.index, &t[..]))
                 .collect();
 
-            match spend.spend_batch(&items, ctx.current_month, &mut OsRng) {
+            match spend.spend_batch_with_revocation(&items, ctx.current_month, &revocation, &mut OsRng) {
                 Err(e) => {
                     // Whole request failed: we cannot know whether the server
                     // burned the nullifiers, so the tokens stay marked used.

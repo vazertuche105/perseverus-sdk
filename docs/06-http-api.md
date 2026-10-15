@@ -66,7 +66,8 @@ New codes may be added; treat unknown ones like `internal`.
 | POST | [`/v1/filters/batch`](#post-v1filtersbatch) | Encrypted filters for heights | `analyzeInputs` |
 | GET | [`/v1/codebook`](#get-v1codebook) | Tag codebook | `analyzeInputs` |
 | GET | [`/v1/revocation/root`](#get-v1revocationroot) | Current revocation root | `analyzeInputs` |
-| GET | [`/v1/revocation/proof/{pack_id}`](#get-v1revocationproofpack_id) | Non-revocation proof | `analyzeInputs` |
+| GET | [`/v1/revocation/list`](#get-v1revocationlist) | Every revoked key (proofs are built on the device) | `analyzeInputs` |
+| GET | [`/v1/revocation/proof/{pack_id}`](#get-v1revocationproofpack_id) | Deprecated: server-built proof | none |
 | POST | [`/v1/analyze/batch`](#post-v1analyzebatch) | Spend tokens, get OPRF evaluations | `analyzeInputs` |
 | GET | [`/v1/circuit/pk`](#get-v1circuitpk-and-v1circuitvk), `/v1/circuit/vk` | Groth16 keys | (fallback only) |
 
@@ -263,9 +264,20 @@ The `ETag` / `If-None-Match` pair returns `304` when unchanged. A server with no
 { "revocation_root_hex": "0000000000000000000000000000000000000000000000000000000000000000" }
 ```
 
+## `GET /v1/revocation/list`
+
+**Why:** every spend proof includes "my pack isn't revoked". Rather than asking the server for that proof (which would reveal the pack), the client downloads the whole list, which is the same for everyone, and builds the proof itself.
+
+```json
+{ "revocation_root_hex": "4f1a…(64 hex)",
+  "revoked_keys_hex": ["9c27…(64 hex)", "d013…(64 hex)"] }
+```
+
+Each key is `Poseidon(pack_id)` as a compressed field element. To use it, rebuild the tree in the given order (`SparseMerkleTree::from_keys` in `perseverus-core`), check its root equals `revocation_root_hex`, and take your pack's non-inclusion proof from it. If your pack's slot is occupied, the pack is revoked. The list is empty (and the root all zeros) until the first revocation; it stays small, since only charged-back card packs are revoked.
+
 ## `GET /v1/revocation/proof/{pack_id}`
 
-**Why:** the Merkle path needed to build the non-revocation part of a spend proof. It reveals which pack is about to be used, but not which query it funds. Fetch it once per pack and cache it until the root changes.
+**Deprecated.** It puts `pack_id` on the wire, which lets the server link spends from the same pack. Use [`/v1/revocation/list`](#get-v1revocationlist) instead. The endpoint stays for SDKs released before 2026-10-15.
 
 ```json
 { "is_included": false,

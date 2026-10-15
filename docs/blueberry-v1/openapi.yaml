@@ -293,16 +293,35 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RevocationRoot' }
 
+  /v1/revocation/list:
+    get:
+      tags: [revocation]
+      operationId: getRevocationList
+      summary: Every revoked key, plus the root they hash to.
+      description: |
+        The whole public revocation list, identical for every client. Wallets
+        rebuild the depth-16 tree from `revoked_keys_hex` (in order), check it
+        hashes to `revocation_root_hex`, and build their own non-inclusion
+        proofs on the device, so no `pack_id` is ever sent. Keys are
+        `Poseidon(pack_id)` as compressed little-endian field elements.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevocationList' }
+
   /v1/revocation/proof/{pack_id}:
     get:
       tags: [revocation]
       operationId: getRevocationProof
-      summary: Proof that a pack is not revoked.
+      deprecated: true
+      summary: Proof that a pack is not revoked (deprecated).
       description: |
-        Needed to build spend proofs. It reveals which pack is about to be
-        used (not which query it funds), so fetch it once per pack and cache
-        it until the revocation root changes. `is_included: true` means the
-        pack was revoked and its tokens can't be spent.
+        Deprecated: it puts `pack_id` on the wire, which lets the server link
+        spends from the same pack. Use `/v1/revocation/list` and build the
+        proof on the device. Kept for older SDKs. `is_included: true` means
+        the pack was revoked and its tokens can't be spent.
       parameters:
         - name: pack_id
           in: path
@@ -668,6 +687,16 @@ components:
       properties:
         revocation_root_hex: { $ref: '#/components/schemas/FieldHex' }
 
+    RevocationList:
+      type: object
+      required: [revocation_root_hex, revoked_keys_hex]
+      additionalProperties: false
+      properties:
+        revocation_root_hex: { $ref: '#/components/schemas/FieldHex' }
+        revoked_keys_hex:
+          type: array
+          description: Revoked keys in insertion order.
+          items: { $ref: '#/components/schemas/FieldHex' }
     RevocationProof:
       type: object
       required: [is_included, siblings_hex, path_bits]

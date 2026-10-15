@@ -35,7 +35,7 @@ Find the message you're seeing. In Kotlin, `e.message` prints as `reason=…` or
 | `InvalidArgument`: `txid … is not 32 bytes` / hex error | Not a 64-character hex txid. | Pass the funding txid in explorer order. |
 | `InvalidArgument`: `proving key …: No such file` / `is not a valid pk.bin` | `provingKeyPath` is wrong, or the file is corrupt or truncated. | Copy `pk.bin` from assets and check its SHA-256 (`ca7922…909b`). |
 | `Server` 404 `not_found: this server does not serve the proving key…` | `provingKeyPath = null` against production. | Ship `pk.bin` and set `provingKeyPath`. |
-| `InsufficientTokens(needed, available)` | Not enough **active** tokens. Packs from a yearly plan that haven't started don't count. | Buy tokens. Nothing was spent. |
+| `InsufficientTokens(needed, available)` | Not enough **active** tokens. Packs from a yearly plan that haven't started don't count, and neither do revoked packs (`PackInfo.revoked`, after a card chargeback). | Buy tokens. Nothing was spent. |
 | Every input `UNGRADED` | Normal for dust, OP_RETURN, ordinal, runes and Counterparty/Omni transactions. Also if you passed the **spending** txid instead of the **funding** txid, or the wrong height for the funding transaction. | Check that `txid` is the transaction that *created* the coin and `blockHeight` is where *that* transaction confirmed. |
 | `NOT_COVERED` | No filter for that block. | `GET /v1/meta` → `filters.covered_ranges`. Try again later. |
 | Report `ERROR`, `token_already_spent` | The token was used before, typically because the same pack was imported or restored on two devices. | Run the check again; the SDK uses another token. Stop sharing the store between devices. |

@@ -54,6 +54,7 @@ use perseverus_core::oprf::{blind, verify_batch};
 use perseverus_core::issuance::IssuedPack;
 use perseverus_core::nullifier::compute_nullifier;
 use perseverus_core::poseidon::PoseidonField;
+use perseverus_core::smt::{revocation_key, SparseMerkleTree};
 use perseverus_core::types::PerseverusError;
 
 /// Per-proof Groth16 generation timings (milliseconds) from the most
@@ -101,6 +102,12 @@ struct RevocationRootResponseWire {
     /// Legacy only; `/v1` doesn't send it.
     #[serde(default)]
     tree_size: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RevocationListResponseWire {
+    revocation_root_hex: String,
+    revoked_keys_hex: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -373,7 +380,58 @@ impl SpendClient {
         Ok((root, wire.tree_size))
     }
 
-    /// Fetch the SMT non-inclusion proof for a pack_id.
+    /// Download the whole revocation list and rebuild the tree locally.
+    ///
+    /// Every wallet downloads the same list, so the request says nothing
+    /// about which pack this wallet holds; non-inclusion proofs are then
+    /// built on the device (`revocation_proof_local`). Fails if the keys
+    /// don't hash to the root the server published alongside them.
+    pub fn fetch_revocation_tree(&self) -> Result<(SparseMerkleTree, PoseidonField), SpendClientError> {
+        let url = format!("{}{}/revocation/list", self.base_url, self.api_prefix);
+        let resp = self.http.get(&url).send()?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().unwrap_or_default();
+            return Err(SpendClientError::ServerStatus { status, body });
+        }
+        let wire: RevocationListResponseWire = resp.json()?;
+        let mut keys = Vec::with_capacity(wire.revoked_keys_hex.len());
+        for h in &wire.revoked_keys_hex {
+            keys.push(PoseidonField::deserialize_compressed(&hex::decode(h)?[..])?);
+        }
+        let root = PoseidonField::deserialize_compressed(&hex::decode(&wire.revocation_root_hex)?[..])?;
+        let tree = SparseMerkleTree::from_keys(keys);
+        if tree.root() != root {
+            return Err(SpendClientError::BadResponse(
+                "revocation list does not hash to the published root".into(),
+            ));
+        }
+        Ok((tree, root))
+    }
+
+    /// Whether `pack_id` is revoked in `tree` (checked on the device).
+    pub fn is_pack_revoked(&self, tree: &SparseMerkleTree, pack_id: u64) -> bool {
+        tree.is_slot_occupied(revocation_key(&self.poseidon, PoseidonField::from(pack_id)))
+    }
+
+    /// Build a pack's non-inclusion proof on the device from a tree
+    /// returned by `fetch_revocation_tree`. Nothing is sent to the server.
+    pub fn revocation_proof_local(
+        &self,
+        tree: &SparseMerkleTree,
+        pack_id: u64,
+    ) -> Result<(Vec<PoseidonField>, Vec<bool>), SpendClientError> {
+        let key = revocation_key(&self.poseidon, PoseidonField::from(pack_id));
+        let proof = tree.try_prove_non_inclusion(key).ok_or(SpendClientError::PackRevoked)?;
+        Ok((proof.siblings, proof.path_bits))
+    }
+
+    /// Fetch the SMT non-inclusion proof for a pack_id from the server.
+    ///
+    /// Deprecated: this puts `pack_id` on the wire, which lets the server
+    /// link spends from the same pack. Spends use `fetch_revocation_tree`
+    /// + `revocation_proof_local` instead.
+    #[deprecated(note = "reveals pack_id to the server; use fetch_revocation_tree + revocation_proof_local")]
     pub fn fetch_revocation_proof(
         &self,
         pack_id: u64,
@@ -427,9 +485,10 @@ impl SpendClient {
         let query = blind(input, rng)
             .map_err(|e| SpendClientError::Proof(format!("blind query: {}", e)))?;
 
-        // 2. Fetch revocation root and non-inclusion proof.
-        let (revocation_root, _tree_size) = self.fetch_revocation_root()?;
-        let (smt_siblings, smt_path_bits) = self.fetch_revocation_proof(issued.pack_id)?;
+        // 2. Download the public revocation list and prove non-inclusion
+        //    on the device (pack_id never leaves it).
+        let (revocation_tree, revocation_root) = self.fetch_revocation_tree()?;
+        let (smt_siblings, smt_path_bits) = self.revocation_proof_local(&revocation_tree, issued.pack_id)?;
 
         // 3. Compute circuit inputs.
         let spend_idx_f = CircuitField::from(spend_idx as u64);
@@ -553,7 +612,8 @@ impl SpendClient {
 
     /// Batch spend — generate all proofs locally, then send them to the
     /// server in one HTTP round trip. Returns a Vec of Results, one per
-    /// input. Revocation root is fetched once and reused for all proofs.
+    /// input. The revocation list is downloaded once and every
+    /// non-inclusion proof is built on the device.
     pub fn spend_batch<R: Rng + rand::CryptoRng>(
         &self,
         spend_items: &[(&IssuedPack, usize, &[u8])],
@@ -563,11 +623,25 @@ impl SpendClient {
         if spend_items.is_empty() {
             return Ok(Vec::new());
         }
+        let revocation = self.fetch_revocation_tree()?;
+        self.spend_batch_with_revocation(spend_items, current_month, &revocation, rng)
+    }
 
-        // 1. Fetch revocation root once — shared by all proofs.
-        eprintln!("[spend_batch] fetching revocation root for {} items", spend_items.len());
-        let (revocation_root, tree_size) = self.fetch_revocation_root()?;
-        eprintln!("[spend_batch] revocation tree has {} entries", tree_size);
+    /// `spend_batch` with a revocation tree the caller already downloaded
+    /// (`fetch_revocation_tree`), e.g. to skip revoked packs before
+    /// reserving tokens. Returns `PackRevoked` before sending anything if
+    /// any item's pack is revoked in that tree.
+    pub fn spend_batch_with_revocation<R: Rng + rand::CryptoRng>(
+        &self,
+        spend_items: &[(&IssuedPack, usize, &[u8])],
+        current_month: u32,
+        revocation: &(SparseMerkleTree, PoseidonField),
+        rng: &mut R,
+    ) -> Result<Vec<Result<G1Projective, SpendClientError>>, SpendClientError> {
+        if spend_items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (revocation_tree, revocation_root) = (&revocation.0, revocation.1);
 
         // 2. Generate all proofs locally.
         struct PreparedSpend {
@@ -597,14 +671,11 @@ impl SpendClient {
             let query = blind(input, rng)
                 .map_err(|e| SpendClientError::Proof(format!("blind query: {}", e)))?;
 
-            // Non-inclusion proof: fetched once per PACK, not once per spend.
-            // Every fetch puts the pack_id on the wire next to this batch, so
-            // repeating it per token would tell the server how many tokens of
-            // that pack this batch spends.
+            // Non-inclusion proof, built locally once per pack.
             let (smt_siblings, smt_path_bits) = match proof_cache.get(&issued.pack_id) {
                 Some(p) => p.clone(),
                 None => {
-                    let p = self.fetch_revocation_proof(issued.pack_id)?;
+                    let p = self.revocation_proof_local(revocation_tree, issued.pack_id)?;
                     proof_cache.insert(issued.pack_id, p.clone());
                     p
                 }

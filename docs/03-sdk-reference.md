@@ -113,7 +113,9 @@ for (p in medusa.listPacks()) {
 }
 ```
 
-`PackInfo`: `packId: ULong`, `size: UInt`, `remaining: UInt`, `startMonth: UInt`, `expirationMonth: UInt`, `method: String` (`"lightning"`, `"card"`, or whatever label was given to `importPack`), `acquiredAt: ULong` (unix seconds), `active: Boolean`.
+`PackInfo`: `packId: ULong`, `size: UInt`, `remaining: UInt`, `startMonth: UInt`, `expirationMonth: UInt`, `method: String` (`"lightning"`, `"card"`, or whatever label was given to `importPack`), `acquiredAt: ULong` (unix seconds), `active: Boolean`, `revoked: Boolean`.
+
+`revoked` is set when the server's public revocation list shows the pack revoked, which happens if its card payment was charged back. The SDK checks this on the device at each analysis; it never sends the pack id. A revoked pack is never `active`, its tokens don't count toward `tokenBalance`, and the flag is permanent.
 
 ---
 

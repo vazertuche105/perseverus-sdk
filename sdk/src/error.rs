@@ -88,6 +88,7 @@ impl From<perseverus_client_native::SpendClientError> for PerseverusError {
             S::Http(h) => h.into(),
             S::ServerStatus { status, body } => Self::Server { status, reason: server_reason(body) },
             S::Crypto(c) => Self::Verification { reason: c.to_string() },
+            S::PackRevoked => Self::Internal { reason: "a token pack has been revoked".into() },
             other => Self::Internal { reason: other.to_string() },
         }
     }

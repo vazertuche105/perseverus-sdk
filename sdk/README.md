@@ -58,7 +58,6 @@ The generated bindings (`com.btcmedusa.perseverus`, about 3k lines) are gitignor
 ## Not done yet
 
 - BTC silent-payment purchase through the SDK (the server endpoint exists: `btc_code` on `/v1/tokens/redeem`).
-- Revocation proofs are fetched on the same circuit as the spend, so spends from one pack are linkable to each other (not to what was checked). See `docs/07-privacy-model.md`, known limitations.
 - A progress callback for the UI, and async variants.
 - Redeem retries survive a dropped connection within one call (Idempotency-Key), but not an app restart mid-redeem.
 

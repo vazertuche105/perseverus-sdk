@@ -31,6 +31,10 @@ pub(crate) struct StoredPack {
     pub expiration_month: u32,
     pub method: String,
     pub acquired_at: u64,
+    /// Set when the server's public revocation list shows this pack revoked
+    /// (e.g. after a card chargeback). Permanent.
+    #[serde(default)]
+    pub revoked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,8 +64,12 @@ pub struct PackInfo {
     pub expiration_month: u32,
     pub method: String,
     pub acquired_at: u64,
-    /// True if `start_month <= current_month <= expiration_month`.
+    /// True if `start_month <= current_month <= expiration_month` and the
+    /// pack isn't revoked.
     pub active: bool,
+    /// True if the pack was revoked (e.g. its card payment was reversed).
+    /// Its tokens can't be spent.
+    pub revoked: bool,
 }
 
 pub(crate) struct Store {
@@ -124,6 +132,7 @@ impl Store {
             expiration_month: issued.expiration_month,
             method: method.into(),
             acquired_at: now,
+            revoked: false,
         };
         self.update(|f| {
             if f.packs.iter().any(|p| p.pack_id == sp.pack_id) {
@@ -200,6 +209,20 @@ impl Store {
         })
     }
 
+    /// Mark packs revoked (from the server's public revocation list, checked
+    /// on the device). Their tokens are never reserved again.
+    pub fn mark_revoked(&self, pack_ids: &[u64]) -> Result<(), PerseverusError> {
+        if pack_ids.is_empty() {
+            return Ok(());
+        }
+        self.update(|f| {
+            for p in f.packs.iter_mut().filter(|p| pack_ids.contains(&p.pack_id)) {
+                p.revoked = true;
+            }
+            Ok(())
+        })
+    }
+
     /// Mark tokens as used from a bitmap (index i used if `spent[i]`).
     /// Returns the pack's remaining count.
     pub fn mark_spent(&self, pack_id: u64, spent: &[bool]) -> Result<u32, PerseverusError> {
@@ -240,7 +263,7 @@ impl Store {
 }
 
 fn is_active(p: &StoredPack, m: u32) -> bool {
-    m == 0 || (p.start_month <= m && m <= p.expiration_month)
+    !p.revoked && (m == 0 || (p.start_month <= m && m <= p.expiration_month))
 }
 
 fn info(p: &StoredPack, current_month: u32) -> PackInfo {
@@ -253,5 +276,6 @@ fn info(p: &StoredPack, current_month: u32) -> PackInfo {
         method: p.method.clone(),
         acquired_at: p.acquired_at,
         active: is_active(p, current_month),
+        revoked: p.revoked,
     }
 }

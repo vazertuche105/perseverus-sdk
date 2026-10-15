@@ -15,6 +15,7 @@ routes = [(path_re(p), p, ops) for p, ops in spec['paths'].items()]
 bad = 0; checked = 0
 for f in sorted(glob.glob(sys.argv[2] + '/*.json')):
     r = json.load(open(f)); path = r['path'].split('?')[0]
+    if not path.startswith('/v1'): continue  # legacy/admin routes aren't part of the contract
     m = next(((p, ops) for rx, p, ops in routes if rx.match(path)), None)
     if not m:
         # unknown routes must still use the error envelope

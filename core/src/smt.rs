@@ -1,9 +1,10 @@
 //! Sparse Merkle Tree (depth-16) for token pack revocation.
 //!
-//! The revocation tree is a depth-16 binary trie where the path from
-//! root to leaf is determined by the first 16 bits of the key (the
-//! Poseidon hash of the pack identifier). An empty node has hash
-//! `EMPTY_HASH = 0`.
+//! The revocation tree is a depth-16 binary Merkle tree. A key (the
+//! Poseidon hash of the pack identifier) lives at leaf index = its low 16
+//! bits; bit `i` decides whether the path is a left or right child at
+//! level `i` counting up from the leaves, matching the spend circuit. An
+//! empty node has hash `EMPTY_HASH = 0`.
 //!
 //! ## Non-inclusion proof
 //!
@@ -12,7 +13,7 @@
 //! is empty (hash = 0). The verifier:
 //!
 //! 1. Starts with `current = EMPTY_HASH` (the leaf is empty)
-//! 2. Folds up 32 levels using the sibling hashes and direction bits
+//! 2. Folds up 16 levels (leaf first) using the sibling hashes and direction bits
 //! 3. Checks `current == revocation_root`
 //!
 //! If the root matches, the key is not in the tree (no revoked token at
@@ -22,10 +23,10 @@
 //!
 //! The key for a pack in the revocation tree is:
 //! ```text
-//! key = Poseidon(pack_id)   (truncated to 32 bits)
+//! key = Poseidon(pack_id)
 //! ```
-//! This produces a 254-bit field element; only the first 16 bits are used
-//! as the tree path. The server checks for path collisions at issuance
+//! This produces a 254-bit field element; only the low 16 bits are used
+//! as the leaf index. The server checks for path collisions at issuance
 //! time, so the 2^16 keyspace is collision-free in practice.
 //!
 //! ## In-circuit usage
@@ -62,7 +63,7 @@ pub fn revocation_key(
 
 /// The 16-bit leaf slot a pack_id occupies in the revocation tree: the
 /// low `SMT_DEPTH` bits (little-endian) of `Poseidon(pack_id)` — exactly
-/// the bits the tree path uses (see `field_to_bits`).
+/// the leaf index the key occupies in the tree.
 ///
 /// Two pack_ids that map to the same slot would share a leaf, so a
 /// revocation of one would strand the other (it could no longer prove
@@ -74,44 +75,45 @@ pub fn revocation_slot(
     cfg: &PoseidonConfig<PoseidonField>,
     pack_id: u64,
 ) -> u16 {
-    let key = revocation_key(cfg, PoseidonField::from(pack_id));
-    let bits = key.into_bigint().to_bits_le();
-    let mut slot: u16 = 0;
-    for i in 0..SMT_DEPTH {
-        if *bits.get(i).unwrap_or(&false) {
-            slot |= 1 << i;
-        }
-    }
-    slot
+    key_slot(revocation_key(cfg, PoseidonField::from(pack_id))) as u16
 }
 
-/// A non-inclusion proof for the sparse Merkle tree.
+/// A non-inclusion proof for the sparse Merkle tree, in the order the
+/// spend circuit consumes it: index 0 is the leaf level, index
+/// `SMT_DEPTH - 1` the level just below the root.
 #[derive(Clone, Debug)]
 pub struct SmtNonInclusionProof {
-    /// The SMT_DEPTH sibling hashes along the path from leaf to root.
+    /// `siblings[i]` is the sibling of the path node at level `i`
+    /// (level 0 = leaves).
     pub siblings: Vec<PoseidonField>,
-    /// The SMT_DEPTH direction bits: `bits[i]` is true if the path goes right at level i.
+    /// `path_bits[i]` is true if the path node at level `i` is a right
+    /// child. Equals bit `i` (little-endian) of the revocation key, which
+    /// the circuit enforces.
     pub path_bits: Vec<bool>,
 }
 
-/// A simple in-memory Sparse Merkle Tree.
+/// The revocation tree: a depth-16 binary Merkle tree whose leaf index is
+/// the key's slot (`revocation_slot`, the low 16 bits of the key).
 ///
-/// For the MVP, the tree stores only the set of revoked keys. Since the
-/// number of revoked packs is expected to be small (< 10K), we use a
-/// HashMap-based lazy representation rather than materializing all 2^256 nodes.
+/// Level 0 holds the leaves; level `SMT_DEPTH` holds the root. A present
+/// leaf hashes to `Poseidon(key, 1)`; an empty leaf is 0; a parent of two
+/// zero children is 0, otherwise `Poseidon(left, right)`. This is exactly
+/// the fold the spend circuit performs (leaf to root, key bit `i` choosing
+/// the side at level `i`), so roots and proofs built here verify in-circuit.
+///
+/// Only non-empty nodes are stored; the number of revoked packs is small.
 #[derive(Clone, Debug)]
 pub struct SparseMerkleTree {
-    /// Cached node hashes. Key = (depth, path_prefix_as_bits), Value = hash.
-    /// We store only non-empty nodes.
-    nodes: std::collections::HashMap<(u8, Vec<bool>), PoseidonField>,
-    /// The set of inserted keys (for iteration/debugging).
+    /// Non-empty node hashes, keyed by (level, index at that level).
+    nodes: std::collections::HashMap<(u8, u32), PoseidonField>,
+    /// Revoked keys in insertion order (`from_keys` of this list
+    /// reproduces the tree exactly, including slot-collision overwrites).
     inserted_keys: Vec<PoseidonField>,
-    /// Poseidon config (cached).
     cfg: PoseidonConfig<PoseidonField>,
 }
 
 impl SparseMerkleTree {
-    /// Create a new empty SMT.
+    /// Create a new empty tree (root 0).
     pub fn new() -> Self {
         Self {
             nodes: std::collections::HashMap::new(),
@@ -120,157 +122,117 @@ impl SparseMerkleTree {
         }
     }
 
-    /// Insert a key into the tree (marks it as revoked).
-    /// The leaf value for a present key is `Poseidon(key, 1)` to distinguish
-    /// from empty (which is 0).
-    pub fn insert(&mut self, key: PoseidonField) {
-        let bits = field_to_bits(key);
-        let leaf_hash = poseidon_hash_many(&self.cfg, &[key, PoseidonField::from(1u64)]);
+    /// Rebuild a tree from its revoked keys, in the order they were
+    /// inserted. Wallets use this to recompute the server's published
+    /// revocation list locally, so they can build their own non-inclusion
+    /// proofs without ever telling the server which pack they hold.
+    pub fn from_keys<I: IntoIterator<Item = PoseidonField>>(keys: I) -> Self {
+        let mut tree = Self::new();
+        for k in keys {
+            tree.insert(k);
+        }
+        tree
+    }
 
-        // Set the leaf node
-        self.nodes.insert(((SMT_DEPTH - 1) as u8, bits.clone()), leaf_hash);
-        self.inserted_keys.push(key);
+    /// The revoked keys, in insertion order.
+    pub fn keys(&self) -> &[PoseidonField] {
+        &self.inserted_keys
+    }
 
-        // Recompute path from leaf to root
-        let mut current = leaf_hash;
-        for depth in (0..SMT_DEPTH).rev() {
-            let bit = bits[depth];
-            let sibling_bits = sibling_path(&bits, depth);
-            let sibling = self.get_node(depth as u8, &sibling_bits);
+    /// Whether `key`'s leaf slot is occupied, i.e. a non-inclusion proof
+    /// for it is impossible (the pack is revoked, or shares a slot with one
+    /// that is).
+    pub fn is_slot_occupied(&self, key: PoseidonField) -> bool {
+        !self.node(0, key_slot(key)).is_zero()
+    }
 
-            let (left, right) = if bit {
-                (sibling, current)
-            } else {
-                (current, sibling)
-            };
-
-            let parent_hash = if left.is_zero() && right.is_zero() {
-                PoseidonField::zero()
-            } else {
-                poseidon_two_to_one(&self.cfg, left, right)
-            };
-
-            let parent_bits = bits[..depth].to_vec();
-            if depth > 0 {
-                self.nodes.insert(((depth - 1) as u8, parent_bits), parent_hash);
-            } else {
-                // Root — store at (0, [])
-                self.nodes.insert((0u8, vec![]), parent_hash);
-            }
-            current = parent_hash;
+    /// Non-panicking `prove_non_inclusion`: `None` when the key's slot is
+    /// occupied (revoked).
+    pub fn try_prove_non_inclusion(&self, key: PoseidonField) -> Option<SmtNonInclusionProof> {
+        if self.is_slot_occupied(key) {
+            None
+        } else {
+            Some(self.prove_non_inclusion(key))
         }
     }
 
-    /// Get the root hash of the tree.
-    pub fn root(&self) -> PoseidonField {
-        if self.inserted_keys.is_empty() {
-            return PoseidonField::zero();
+    /// Insert a key (mark it revoked). The leaf value is `Poseidon(key, 1)`
+    /// so a present leaf is never 0.
+    pub fn insert(&mut self, key: PoseidonField) {
+        let slot = key_slot(key);
+        let mut current = poseidon_hash_many(&self.cfg, &[key, PoseidonField::from(1u64)]);
+        self.nodes.insert((0, slot), current);
+        self.inserted_keys.push(key);
+
+        let mut idx = slot;
+        for level in 0..SMT_DEPTH as u8 {
+            let sibling = self.node(level, idx ^ 1);
+            let (left, right) = if idx & 1 == 1 { (sibling, current) } else { (current, sibling) };
+            current = self.parent(left, right);
+            idx >>= 1;
+            self.nodes.insert((level + 1, idx), current);
         }
-        // Recompute from scratch for correctness
-        self.compute_root()
+    }
+
+    /// The root hash (0 for an empty tree).
+    pub fn root(&self) -> PoseidonField {
+        self.node(SMT_DEPTH as u8, 0)
     }
 
     /// Generate a non-inclusion proof for a key.
-    /// Panics if the key IS in the tree.
+    /// Panics if the key's slot is occupied; see `try_prove_non_inclusion`.
     pub fn prove_non_inclusion(&self, key: PoseidonField) -> SmtNonInclusionProof {
-        let bits = field_to_bits(key);
-
-        // Verify the key is not in the tree
-        let leaf = self.get_node((SMT_DEPTH - 1) as u8, &bits);
+        let slot = key_slot(key);
         assert!(
-            leaf.is_zero(),
+            self.node(0, slot).is_zero(),
             "cannot generate non-inclusion proof: key is in the tree"
         );
-
-        // Collect siblings along the path
         let mut siblings = Vec::with_capacity(SMT_DEPTH);
-        for depth in 0..SMT_DEPTH {
-            let sibling_bits = sibling_path(&bits, depth);
-            let sibling = self.get_subtree_hash(depth, &sibling_bits);
-            siblings.push(sibling);
+        let mut path_bits = Vec::with_capacity(SMT_DEPTH);
+        for level in 0..SMT_DEPTH {
+            let idx = slot >> level;
+            siblings.push(self.node(level as u8, idx ^ 1));
+            path_bits.push(idx & 1 == 1);
         }
-
-        SmtNonInclusionProof {
-            siblings,
-            path_bits: bits,
-        }
+        SmtNonInclusionProof { siblings, path_bits }
     }
 
-    /// Verify a non-inclusion proof against a given root.
+    /// Verify a non-inclusion proof against a root: fold from an empty leaf
+    /// up to the root, exactly as the spend circuit does.
     pub fn verify_non_inclusion(
         cfg: &PoseidonConfig<PoseidonField>,
         root: PoseidonField,
         proof: &SmtNonInclusionProof,
     ) -> bool {
-        assert_eq!(proof.siblings.len(), SMT_DEPTH);
-        assert_eq!(proof.path_bits.len(), SMT_DEPTH);
-
-        // Start from an empty leaf
+        if proof.siblings.len() != SMT_DEPTH || proof.path_bits.len() != SMT_DEPTH {
+            return false;
+        }
         let mut current = empty_hash();
-
-        // Fold up from leaf (depth 255) to root (depth 0)
-        for depth in (0..SMT_DEPTH).rev() {
-            let sibling = proof.siblings[depth];
-            let bit = proof.path_bits[depth];
-
-            let (left, right) = if bit {
-                (sibling, current)
+        for i in 0..SMT_DEPTH {
+            let (left, right) = if proof.path_bits[i] {
+                (proof.siblings[i], current)
             } else {
-                (current, sibling)
+                (current, proof.siblings[i])
             };
-
             current = if left.is_zero() && right.is_zero() {
                 PoseidonField::zero()
             } else {
                 poseidon_two_to_one(cfg, left, right)
             };
         }
-
         current == root
     }
 
-    // ── internal helpers ──────────────────────────────────────────────────
-
-    fn get_node(&self, depth: u8, path: &[bool]) -> PoseidonField {
-        self.nodes
-            .get(&(depth, path.to_vec()))
-            .copied()
-            .unwrap_or_else(PoseidonField::zero)
+    fn node(&self, level: u8, idx: u32) -> PoseidonField {
+        self.nodes.get(&(level, idx)).copied().unwrap_or_else(PoseidonField::zero)
     }
 
-    /// Get the hash of the subtree rooted at (depth, path).
-    /// For a leaf (depth index in the full 256 path), returns the stored value or 0.
-    fn get_subtree_hash(&self, depth: usize, path: &[bool]) -> PoseidonField {
-        // This returns the sibling's subtree hash at a given depth.
-        // For the simple case where the sibling subtree is empty, returns 0.
-        // For non-empty subtrees, we need to compute the hash upward.
-        self.compute_subtree_hash_at(depth, path)
-    }
-
-    fn compute_subtree_hash_at(&self, depth: usize, path: &[bool]) -> PoseidonField {
-        // Fast path: if the tree has no nodes at all, every subtree is zero.
-        if self.nodes.is_empty() {
-            return PoseidonField::zero();
+    fn parent(&self, left: PoseidonField, right: PoseidonField) -> PoseidonField {
+        if left.is_zero() && right.is_zero() {
+            PoseidonField::zero()
+        } else {
+            poseidon_two_to_one(&self.cfg, left, right)
         }
-
-        // At the leaf level (depth == SMT_DEPTH-1 counting from root),
-        // check if there's a value
-        if depth == SMT_DEPTH - 1 {
-            return self.get_node((SMT_DEPTH - 1) as u8, path);
-        }
-
-        // Check if this node was already computed during insert().
-        // The insert path stores intermediate hashes keyed by (depth, path).
-        if let Some(&hash) = self.nodes.get(&(depth as u8, path.to_vec())) {
-            return hash;
-        }
-
-        // No stored node at this position means the entire subtree is empty.
-        PoseidonField::zero()
-    }
-
-    fn compute_root(&self) -> PoseidonField {
-        self.compute_subtree_hash_at(0, &[])
     }
 }
 
@@ -280,21 +242,11 @@ impl Default for SparseMerkleTree {
     }
 }
 
-/// Convert a field element to 256 bits (LSB first).
-fn field_to_bits(f: PoseidonField) -> Vec<bool> {
-    let bigint = f.into_bigint();
-    let mut bits = bigint.to_bits_le();
-    bits.resize(SMT_DEPTH, false);
-    bits
-}
-
-/// Get the path bits for the sibling at a given depth.
-/// The sibling shares the same prefix but has the opposite bit at `depth`.
-fn sibling_path(bits: &[bool], depth: usize) -> Vec<bool> {
-    let mut path = bits[..=depth].to_vec();
-    let last = path.len() - 1;
-    path[last] = !path[last];
-    path
+/// The leaf index of a key: its low `SMT_DEPTH` bits, little-endian
+/// (same as `revocation_slot`).
+fn key_slot(key: PoseidonField) -> u32 {
+    let bits = key.into_bigint().to_bits_le();
+    (0..SMT_DEPTH).fold(0u32, |acc, i| if bits[i] { acc | (1 << i) } else { acc })
 }
 
 #[cfg(test)]
@@ -308,7 +260,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // 32 Poseidon hashes per verify — fast in release
     fn non_inclusion_in_empty_tree() {
         let smt = SparseMerkleTree::new();
         let cfg = poseidon_config();
@@ -318,7 +269,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // 32 Poseidon hashes per verify — fast in release
     fn non_inclusion_after_insert() {
         let mut smt = SparseMerkleTree::new();
         let cfg = poseidon_config();
@@ -335,7 +285,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // tree recomputation — fast in release
     fn root_changes_after_insert() {
         let mut smt = SparseMerkleTree::new();
         let cfg = poseidon_config();
@@ -360,7 +309,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // 32 Poseidon hashes per verify — fast in release
     fn proof_fails_with_wrong_root() {
         let mut smt = SparseMerkleTree::new();
         let cfg = poseidon_config();
@@ -377,7 +325,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // multiple inserts + verify — fast in release
     fn multiple_inserts_non_inclusion() {
         let mut smt = SparseMerkleTree::new();
         let cfg = poseidon_config();
@@ -393,5 +340,35 @@ mod tests {
         let proof = smt.prove_non_inclusion(key_not_in);
         let root = smt.root();
         assert!(SparseMerkleTree::verify_non_inclusion(&cfg, root, &proof));
+    }
+
+    #[test]
+    fn from_keys_reproduces_tree_and_proofs() {
+        let cfg = poseidon_config();
+        let mut server = SparseMerkleTree::new();
+        for id in [3u64, 99, 12345, 777_777] {
+            server.insert(revocation_key(&cfg, PoseidonField::from(id)));
+        }
+        let wallet = SparseMerkleTree::from_keys(server.keys().iter().copied());
+        assert_eq!(wallet.root(), server.root());
+        assert_eq!(wallet.keys(), server.keys());
+
+        let mine = revocation_key(&cfg, PoseidonField::from(42u64));
+        let local = wallet.try_prove_non_inclusion(mine).expect("not revoked");
+        let remote = server.prove_non_inclusion(mine);
+        assert_eq!(local.siblings, remote.siblings);
+        assert_eq!(local.path_bits, remote.path_bits);
+        assert!(SparseMerkleTree::verify_non_inclusion(&cfg, server.root(), &local));
+
+        let revoked = revocation_key(&cfg, PoseidonField::from(99u64));
+        assert!(wallet.is_slot_occupied(revoked));
+        assert!(wallet.try_prove_non_inclusion(revoked).is_none());
+    }
+
+    #[test]
+    fn from_empty_list_is_empty_tree() {
+        let t = SparseMerkleTree::from_keys(std::iter::empty());
+        assert!(t.root().is_zero());
+        assert!(t.keys().is_empty());
     }
 }

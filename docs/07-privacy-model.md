@@ -6,11 +6,31 @@ What each party can and cannot learn when a wallet uses BTC Medusa, stated plain
 
 **The server never learns which coins a user owns or asked about.** No request contains a txid, an outpoint, an address or a balance. Analysis results are computed and decrypted on the device.
 
+## Testing with a wallet that holds real funds
+
+You can point a development build at production with your own wallet. Here is exactly what the server receives during an analysis, and nothing else:
+
+| Request | What it carries |
+|---|---|
+| `GET /v1/meta`, `/v1/codebook`, `/v1/revocation/root`, `/v1/revocation/list` | Nothing. The same public data every wallet downloads. |
+| `POST /v1/filters/batch` | A shuffled list of block heights: each real one hidden among decoys. |
+| `POST /v1/analyze/batch` | Per matched funding transaction: a **blinded** curve point (the txid multiplied by a random secret that never leaves the phone) and a zero-knowledge spend proof (a one-time nullifier, the month, the public revocation root). No heights. |
+
+This is checked, not just stated. An end-to-end test records every byte a wallet sends to the server (URLs, headers and bodies) across real spends, a double-spend and a revoked pack. It fails if any of these appear: the txids in either byte order, their prefixes, the **unblinded** txid points (which is what would leak if blinding were skipped), the pack id, the token seed, or a real block height without at least three decoys. The test is `analyze_inputs_end_to_end` in the server repository; it's run before each release.
+
+**Debug mode doesn't change this.** `PERSEVERUS_DEBUG=1` only prints to the device's own stderr. It sends nothing extra to the server, and even locally it never prints txids, tags, heights, pack ids or nullifiers.
+
+Three things are still up to you when testing with real funds:
+
+- **Use Tor.** With `Transport.Direct`, the server sees your IP address and when you checked. That still says nothing about which coins, but your IP plus timing is information. Use the `.onion` endpoint with `Transport.Tor`.
+- **Keep decoys at 8 or more.** `decoysPerInput = 0` sends your coins' real block heights unhidden.
+- **Prefer Lightning over card** if you'd rather your identity weren't attached even to the purchase. A card payment tells Stripe and the server who bought tokens, though never what they checked.
+
 ## Who sees what
 
 | Party | Can learn | Cannot learn |
 |---|---|---|
-| **Medusa server** | <ul><li>That some Tor user downloaded filters for a set of block heights (real ones mixed with decoys).</li><li>That some Tor user spent *k* valid tokens at a given time.</li><li>That a payment was made for a plan.</li><li>Which pack a spend draws from (see [known limitations](#known-limitations)).</li></ul> | <ul><li>Which heights were real.</li><li>Any txid, outpoint, address, amount or result.</li><li>The user's IP (Tor).</li><li>Which payment a spend came from, beyond timing (blind signatures).</li><li>The user's balance.</li></ul> |
+| **Medusa server** | <ul><li>That some Tor user downloaded filters for a set of block heights (real ones mixed with decoys).</li><li>That some Tor user spent *k* valid tokens at a given time.</li><li>That a payment was made for a plan.</li></ul> | <ul><li>Which heights were real.</li><li>Any txid, outpoint, address, amount or result.</li><li>The user's IP (Tor).</li><li>Which payment or pack a spend came from (blind signatures; revocation proofs are built on the device).</li><li>The user's balance.</li></ul> |
 | **Network observer** (ISP, Wi-Fi) | That the device uses Tor. | Anything about Medusa traffic. |
 | **Tor exit / relays** | Nothing. The server is an onion service, so traffic never leaves Tor. | |
 | **Lightning payment path** | A payment of the invoice amount to the server's node. | What it's for, beyond the invoice description. |

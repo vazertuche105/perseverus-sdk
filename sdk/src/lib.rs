@@ -473,19 +473,7 @@ fn version_lt(a: &str, b: &str) -> bool {
 fn json_or_error<T: serde::de::DeserializeOwned>(resp: reqwest::blocking::Response) -> Result<T, PerseverusError> {
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().unwrap_or_default();
-        // /v1 errors are {"error":{"code","message","retryable"}}; legacy
-        // ones are {"error":"..."}.
-        let message = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| {
-                let e = v.get("error")?;
-                match (e.get("code").and_then(|c| c.as_str()), e.get("message").and_then(|m| m.as_str())) {
-                    (Some(c), Some(m)) => Some(format!("{c}: {m}")),
-                    _ => e.as_str().map(String::from),
-                }
-            })
-            .unwrap_or(body);
+        let message = error::server_reason(resp.text().unwrap_or_default());
         return Err(PerseverusError::Server { status: status.as_u16(), reason: message });
     }
     resp.json().map_err(|e| PerseverusError::Internal { reason: format!("bad response: {e}") })

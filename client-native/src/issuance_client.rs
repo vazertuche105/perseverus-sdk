@@ -181,6 +181,9 @@ pub struct IssuanceClient {
     api_prefix: &'static str,
 }
 
+/// Tries for `POST /v1/tokens/redeem` when the connection fails without a response.
+const V1_REDEEM_ATTEMPTS: u32 = 4;
+
 /// Credential for `POST /v1/tokens/redeem`.
 #[derive(Debug, Clone, Copy)]
 pub enum V1Credential<'a> {
@@ -632,7 +635,12 @@ impl IssuanceClient {
             V1Credential::BtcCode(code) => body["btc_code"] = code.into(),
         }
         let url = format!("{}/v1/tokens/redeem", self.base_url);
-        let responses = self.post_packs(&url, &body, &prepared)?;
+        // The server signs, then marks the purchase used. If the connection
+        // drops after that, a plain retry would be refused and the paid packs
+        // lost. Resending the same body with the same Idempotency-Key makes
+        // the server replay its stored response instead.
+        let key = hex::encode(rng.gen::<[u8; 16]>());
+        let responses = self.post_packs_keyed(&url, &body, &prepared, Some(&key), V1_REDEEM_ATTEMPTS)?;
         let mut issued = Vec::with_capacity(prepared.len());
         for (i, (request, secrets)) in prepared.iter().enumerate() {
             let (expiration_month, start_month) = schedule[i];
@@ -690,7 +698,35 @@ impl IssuanceClient {
         body: &serde_json::Value,
         prepared: &[(PackRequest, PackSecrets)],
     ) -> Result<Vec<PackResponse>, IssuanceClientError> {
-        let http_resp = self.http.post(url).json(body).send()?;
+        self.post_packs_keyed(url, body, prepared, None, 1)
+    }
+
+    /// `post_packs` with an optional `Idempotency-Key`. With a key, transport
+    /// failures (no HTTP response at all) are retried up to `attempts` times
+    /// with the identical body, which the server answers from its replay store.
+    fn post_packs_keyed(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        prepared: &[(PackRequest, PackSecrets)],
+        idempotency_key: Option<&str>,
+        attempts: u32,
+    ) -> Result<Vec<PackResponse>, IssuanceClientError> {
+        let mut attempt = 0;
+        let http_resp = loop {
+            attempt += 1;
+            let mut req = self.http.post(url).json(body);
+            if let Some(k) = idempotency_key {
+                req = req.header("Idempotency-Key", k);
+            }
+            match req.send() {
+                Ok(r) => break r,
+                Err(e) if idempotency_key.is_some() && attempt < attempts && e.status().is_none() => {
+                    std::thread::sleep(Duration::from_secs(2 * attempt as u64));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
         if !http_resp.status().is_success() {
             let status = http_resp.status().as_u16();
             let body = http_resp.text().unwrap_or_default();

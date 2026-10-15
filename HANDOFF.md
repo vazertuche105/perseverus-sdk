@@ -41,8 +41,8 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
    - **`PrivacyReport` field guide:** every grade, status and finding explained.
    - **HTTP `/v1` reference:** each endpoint's purpose, request and response with real examples, and errors (after step 2, so it documents the final API).
    - **Privacy and threat model** in plain language, plus troubleshooting.
-4. **Native builds:** Android via `cargo-ndk` (arm64-v8a, x86_64), iOS as an XCFramework via `uniffi-bindgen --language swift`. Add CI and publish to Maven or GitHub Packages.
-5. **SDK features:** card yearly plan (13 packs), BTC silent-payment purchase, a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
+   - **Build instructions for integrators:** how to compile the SDK for Android (`cargo-ndk`) and iOS (XCFramework via `uniffi-bindgen --language swift`). Integrators build and ship the native library themselves; we don't publish binaries.
+4. **SDK features:** card yearly plan (13 packs), BTC silent-payment purchase, a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
 
 **Open questions for BlueWallet:** inputs as a PSBT or as outpoints plus heights (the SDK takes outpoints plus heights today); decoy default and bandwidth budget; which block range must have filters; payment methods at launch; how the SDK is licensed and published.
 

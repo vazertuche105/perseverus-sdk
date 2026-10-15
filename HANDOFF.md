@@ -33,12 +33,16 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 
 ## Next steps, in order
 
-1. Verify `analyze` on a real coin, for example: `./gradlew run --args="analyze <txid>:<vout>:<height>"`.
-2. Native builds: Android via `cargo-ndk` (arm64-v8a, x86_64), iOS as an XCFramework via `uniffi-bindgen --language swift`. Add CI and publish to Maven or GitHub Packages.
-3. SDK features: card yearly plan (13 packs), BTC silent-payment purchase, a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
-4. Privacy fix in `client-native/src/spend_client.rs` `spend_batch`: fetch `/revocation/proof/{pack_id}` once per pack instead of once per spend.
-5. Once the server's `/v1` façade exists (contract in `docs/blueberry-v1/openapi.yaml`), switch the SDK's paths to `/v1` and use `/v1/meta`.
-6. A quickstart and threat-model write-up for BlueWallet.
+1. ~~Verify `analyze` on a real coin.~~ Done 2026-10-14: real mainnet coin against production, grade D (peel chain), 1 token, 3.3 s.
+2. **Server `/v1` API** (done in the private server repo, contract in `docs/blueberry-v1/openapi.yaml`), then switch the SDK's paths to `/v1`.
+3. **Developer documentation** in `docs/`, written for a wallet developer who has never seen this project:
+   - **SDK guide:** every function and type, with what it does, *why* it exists (including the privacy reason), when to call it, a Kotlin example, its errors and how to handle them, and what the server can and can't see.
+   - **5-minute quickstart** and walkthroughs: buying tokens, pre-broadcast analysis, showing ungraded / not-covered / error results.
+   - **`PrivacyReport` field guide:** every grade, status and finding explained.
+   - **HTTP `/v1` reference:** each endpoint's purpose, request and response with real examples, and errors (after step 2, so it documents the final API).
+   - **Privacy and threat model** in plain language, plus troubleshooting.
+4. **Native builds:** Android via `cargo-ndk` (arm64-v8a, x86_64), iOS as an XCFramework via `uniffi-bindgen --language swift`. Add CI and publish to Maven or GitHub Packages.
+5. **SDK features:** card yearly plan (13 packs), BTC silent-payment purchase, a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
 
 **Open questions for BlueWallet:** inputs as a PSBT or as outpoints plus heights (the SDK takes outpoints plus heights today); decoy default and bandwidth budget; which block range must have filters; payment methods at launch; how the SDK is licensed and published.
 

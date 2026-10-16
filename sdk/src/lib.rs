@@ -396,8 +396,18 @@ impl Perseverus {
         Ok(info)
     }
 
+    /// Forget the grades cached on this device. The next analysis of those
+    /// coins looks them up again (and spends tokens). Normally never needed:
+    /// cached grades are what keep repeat analyses from revealing which block
+    /// a coin is in.
+    pub fn forget_cached_grades(&self) -> Result<(), PerseverusError> {
+        self.store.forget_grades()
+    }
+
     /// Analyse the inputs of a transaction before broadcast.
     ///
+    /// Coins already graded on this device are answered locally, with no
+    /// request and no token spent (`token_spent` is false on those reports).
     /// Spends one token per distinct funding transaction that is found in the
     /// filters. Inputs that are ungraded (excluded by skip rules) or not
     /// covered (no filter yet) cost nothing. Fails with `InsufficientTokens`

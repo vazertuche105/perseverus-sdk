@@ -12,6 +12,10 @@
 //! What the server sees: a shuffled set of block heights (real ∪ decoys) on
 //! one circuit, and later, on a different circuit, k blinded points with spend
 //! proofs. It never sees a txid, an outpoint, or which heights were real.
+//!
+//! A funding transaction already graded on this device is answered from the
+//! local cache and never requested again: repeated decoy sets around the same
+//! block let the server intersect them (security review F11).
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,7 +29,7 @@ use rand::seq::SliceRandom;
 
 use crate::error::PerseverusError;
 use crate::report::{self, InputRef, PrivacyReport};
-use crate::store::Store;
+use crate::store::{grade_key, Store};
 
 /// Server limits (see `/filters/batch` and `/oprf/evaluate/batch`).
 const MAX_FILTERS_PER_REQUEST: usize = 200;
@@ -152,10 +156,26 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
         input_funding.push(idx);
     }
 
+    // ── 1b. Answer already-graded funding txs from the local cache ──
+    let mut outcomes: Vec<Outcome> = fundings.iter().map(|_| Outcome::Pending).collect();
+    let cached = ctx.store.cached_grades()?;
+    for (fi, f) in fundings.iter().enumerate() {
+        if let Some(&tag) = cached.get(&grade_key(&f.txid_internal, f.height)) {
+            outcomes[fi] = Outcome::Done(Box::new(move |i| report::graded(i, tag, false)));
+        }
+    }
+
     // ── 2. Download filters for real + decoy heights (shuffled, chunked) ──
-    let real: HashSet<u32> = fundings.iter().map(|f| f.height).collect();
-    let tip = opts.chain_tip.max(*real.iter().max().unwrap());
-    let heights = heights_with_decoys(&real, opts.decoys_per_input as usize, tip);
+    let real: HashSet<u32> = fundings
+        .iter()
+        .zip(&outcomes)
+        .filter(|(_, o)| matches!(o, Outcome::Pending))
+        .map(|(f, _)| f.height)
+        .collect();
+    let heights = match real.iter().max() {
+        Some(&max_real) => heights_with_decoys(&real, opts.decoys_per_input as usize, opts.chain_tip.max(max_real)),
+        None => Vec::new(), // everything came from the cache: no request at all
+    };
     let mut filters: HashMap<u32, Vec<u8>> = HashMap::new();
     let mut bytes = 0u64;
     for chunk in heights.chunks(MAX_FILTERS_PER_REQUEST) {
@@ -170,9 +190,11 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
     // ── 3. Local match ──
     let mut codebook: Option<Codebook> = None;
     let mut decoded: HashMap<u32, (BlockFilterV5, Vec<u64>)> = HashMap::new();
-    let mut outcomes: Vec<Outcome> = fundings.iter().map(|_| Outcome::Pending).collect();
 
     for (fi, f) in fundings.iter().enumerate() {
+        if !matches!(outcomes[fi], Outcome::Pending) {
+            continue; // answered from the cache
+        }
         let Some(data) = filters.get(&f.height) else {
             outcomes[fi] = Outcome::Done(Box::new(report::not_covered));
             continue;
@@ -304,6 +326,14 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
             }
         }
         ctx.store.release(&released)?;
+
+        // Remember every grade we just paid for, so these coins are never
+        // looked up again.
+        let learned: Vec<(String, u32)> = tags
+            .iter()
+            .filter_map(|(&fi, t)| t.as_ref().ok().map(|&tag| (grade_key(&fundings[fi].txid_internal, fundings[fi].height), tag)))
+            .collect();
+        ctx.store.save_grades(&learned)?;
     }
 
     // ── 5. Reports, in input order ──
@@ -321,4 +351,41 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
         .collect();
 
     Ok(AnalysisResult { reports, tokens_spent, filters_downloaded, bytes_downloaded: bytes })
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    /// F11: a coin graded before is answered from the device, with no request
+    /// at all (the query client points at a closed port, so any request would
+    /// fail the call) and no token spent.
+    #[test]
+    fn cached_grade_needs_no_request() {
+        let dir = std::env::temp_dir().join(format!("perseverus-grade-cache-{}", rand::random::<u64>()));
+        let store = Store::open(&dir).unwrap();
+        let txid_display = "11".repeat(32);
+        let txid_internal = parse_txid_display(&txid_display).unwrap();
+        store.save_grades(&[(grade_key(&txid_internal, 800_000), 0x00_12_34_56)]).unwrap();
+
+        let query = QueryClient::new("http://127.0.0.1:9");
+        let no_spend = || -> Result<SpendClient, PerseverusError> { panic!("must not spend") };
+        let ctx = Ctx { query: &query, spend: &no_spend, store: &store, current_month: 202610 };
+        let inputs = vec![InputRef { txid: txid_display, vout: 0, block_height: 800_000, value_sats: None }];
+        let opts = AnalyzeOptions { decoys_per_input: 8, chain_tip: 900_000 };
+
+        let res = analyze(&ctx, inputs, &opts).expect("answered from cache");
+        assert_eq!(res.tokens_spent, 0);
+        assert_eq!(res.filters_downloaded, 0);
+        assert_eq!(res.reports.len(), 1);
+        assert_eq!(res.reports[0].input.block_height, 800_000);
+        assert_eq!(res.reports[0].status, crate::report::ReportStatus::Graded);
+        assert!(!res.reports[0].token_spent);
+
+        // After forgetting, the same call has to go to the network (and fails here).
+        store.forget_grades().unwrap();
+        let inputs = vec![InputRef { txid: "11".repeat(32), vout: 0, block_height: 800_000, value_sats: None }];
+        assert!(analyze(&ctx, inputs, &opts).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

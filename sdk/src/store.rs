@@ -52,6 +52,17 @@ struct StoreFile {
     packs: Vec<StoredPack>,
     #[serde(default)]
     pending_purchases: Vec<StoredPurchase>,
+    /// Grades already learned, keyed by [`grade_key`]. A coin's grade is
+    /// looked up once and then answered from here, so the server never sees
+    /// the same coin's block requested twice (security review F11: repeated
+    /// lookups let the server intersect decoy sets).
+    #[serde(default)]
+    grades: std::collections::BTreeMap<String, u32>,
+}
+
+/// Cache key for a funding transaction: internal-order txid hex and height.
+pub(crate) fn grade_key(txid_internal: &[u8; 32], height: u32) -> String {
+    format!("{}:{}", hex::encode(txid_internal), height)
 }
 
 /// Metadata for one locally held pack (no secrets).
@@ -252,6 +263,31 @@ impl Store {
     pub fn remove_pending_purchase(&self, purchase_id: &str) -> Result<(), PerseverusError> {
         self.update(|f| {
             f.pending_purchases.retain(|x| x.purchase_id != purchase_id);
+            Ok(())
+        })
+    }
+
+    /// All cached grades (24-bit tags) by [`grade_key`].
+    pub fn cached_grades(&self) -> Result<std::collections::BTreeMap<String, u32>, PerseverusError> {
+        let _g = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        Ok(self.read()?.grades)
+    }
+
+    pub fn save_grades(&self, items: &[(String, u32)]) -> Result<(), PerseverusError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        self.update(|f| {
+            for (k, tag) in items {
+                f.grades.insert(k.clone(), *tag);
+            }
+            Ok(())
+        })
+    }
+
+    pub fn forget_grades(&self) -> Result<(), PerseverusError> {
+        self.update(|f| {
+            f.grades.clear();
             Ok(())
         })
     }

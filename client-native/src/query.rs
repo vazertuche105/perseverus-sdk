@@ -119,6 +119,94 @@ pub trait QueryProgress: Send {
     fn filter_downloaded(&self, _height: u32) {}
 }
 
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+
+    #[test]
+    fn cover_set_always_contains_the_block_and_enough_decoys() {
+        let mut rng = rand::thread_rng();
+        for h in [1u32, 5, 500_000, 899_999, 900_000] {
+            let set = cover_set(h, 8, 5.0, 900_000, &mut rng);
+            assert!(set.contains(&h));
+            assert!(set.len() >= MIN_DECOYS_PER_LOOKUP + 1, "h={} set={:?}", h, set);
+            assert!(set.iter().all(|&x| (1..=900_000).contains(&x)));
+        }
+    }
+
+    /// F14: with too few decoys or no chain tip, a cache miss must fail
+    /// before any request is made (the client points at a closed port, so
+    /// reaching the network would surface as a client error instead).
+    #[test]
+    fn lone_height_is_never_requested() {
+        let client = QueryClient::new("http://127.0.0.1:9");
+        let mut rng = rand::thread_rng();
+        let h = 812_345;
+        for cfg in [
+            QueryConfig { num_decoys: 0, chain_tip: 900_000, ..QueryConfig::default() },
+            QueryConfig { num_decoys: 3, chain_tip: 900_000, ..QueryConfig::default() },
+            QueryConfig { num_decoys: 8, chain_tip: 0, ..QueryConfig::default() },
+        ] {
+            match filter_with_cover(&client, h, &cfg, &mut rng) {
+                Err(QueryError::Other(msg)) => assert!(msg.starts_with("refusing"), "{}", msg),
+                other => panic!("expected a refusal, got {:?}", other.map(|v| v.len())),
+            }
+        }
+    }
+
+    /// F14: on a cache miss the real height goes out in one batch with its
+    /// decoys, never on its own. A one-shot local HTTP server records what
+    /// was asked for.
+    #[test]
+    fn cache_miss_fetches_inside_a_decoy_set() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<(String, Vec<u32>)>();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut req = Vec::new();
+            let mut buf = [0u8; 8192];
+            // Read headers + body (Content-Length) of the single request.
+            loop {
+                let n = sock.read(&mut buf).unwrap();
+                req.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&req).to_string();
+                if let Some(i) = text.find("\r\n\r\n") {
+                    let len = text.lines()
+                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap()))
+                        .unwrap_or(0);
+                    if req.len() >= i + 4 + len { break; }
+                }
+            }
+            let text = String::from_utf8_lossy(&req).to_string();
+            let line = text.lines().next().unwrap().to_string();
+            let body = &text[text.find("\r\n\r\n").unwrap() + 4..];
+            let v: serde_json::Value = serde_json::from_str(body).unwrap();
+            let heights: Vec<u32> = v["heights"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect();
+            let filters: Vec<_> = heights.iter().map(|h| serde_json::json!({"height": h, "filter_hex": "ab"})).collect();
+            let out = serde_json::json!({"filters": filters, "missing": []}).to_string();
+            write!(sock, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", out.len(), out).unwrap();
+            tx.send((line, heights)).unwrap();
+        });
+
+        let client = QueryClient::new(format!("http://{}", addr));
+        let h = 777_777; // unique to this test: the filter cache is process-wide
+        let cfg = QueryConfig { num_decoys: 8, chain_tip: 900_000, ..QueryConfig::default() };
+        let data = filter_with_cover(&client, h, &cfg, &mut rand::thread_rng()).expect("fetch");
+        assert_eq!(data, vec![0xab]);
+
+        let (line, heights) = rx.recv().unwrap();
+        assert!(line.starts_with("POST ") && line.contains("/filters/batch"), "{}", line);
+        assert!(heights.contains(&h));
+        assert!(heights.len() >= MIN_DECOYS_PER_LOOKUP + 1, "{:?}", heights);
+        // Sent sorted, so the real block's position says nothing.
+        assert!(heights.windows(2).all(|w| w[0] < w[1]));
+        // Served from cache now, with no further request.
+        assert_eq!(filter_with_cover(&client, h, &cfg, &mut rand::thread_rng()).unwrap(), vec![0xab]);
+    }
+}
+
 /// No-op progress reporter for tests and non-UI usage.
 pub struct NoProgress;
 impl QueryProgress for NoProgress {}
@@ -134,11 +222,11 @@ pub fn private_query<R: Rng>(
     txid: [u8; 32],
     vout_index: u32,
     block_height: u32,
-    _config: &QueryConfig,
+    config: &QueryConfig,
     _progress: &dyn QueryProgress,
     rng: &mut R,
 ) -> Result<QueryResult, QueryError> {
-    let filter_data = client.download_filter_cached(block_height)?;
+    let filter_data = filter_with_cover(client, block_height, config, rng)?;
     dispatch(client, txid, vout_index, block_height, &filter_data, rng, None)
 }
 
@@ -152,13 +240,72 @@ pub fn private_query_authenticated<R: Rng>(
     txid: [u8; 32],
     vout_index: u32,
     block_height: u32,
-    _config: &QueryConfig,
+    config: &QueryConfig,
     _progress: &dyn QueryProgress,
     rng: &mut R,
     gamma: G1Projective,
 ) -> Result<QueryResult, QueryError> {
-    let filter_data = client.download_filter_cached(block_height)?;
+    let filter_data = filter_with_cover(client, block_height, config, rng)?;
     dispatch(client, txid, vout_index, block_height, &filter_data, rng, Some(gamma))
+}
+
+/// The fewest decoys a lookup will fetch alongside a real block. Matches the
+/// SDK's `MIN_DECOYS_PER_INPUT`.
+pub const MIN_DECOYS_PER_LOOKUP: usize = 4;
+
+/// The filter for `block_height`, from the cache if a decoy prefetch already
+/// fetched it, otherwise fetched **inside a fresh decoy set**.
+///
+/// Security review F14: this used to call `download_filter_cached`, which on
+/// a cache miss downloaded the real height alone. Wallets prefetch filters
+/// with decoys first, but when that prefetch failed or ran long (common over
+/// Tor) every lookup then told the server exactly which block it was for.
+/// Now a lone height is never requested: a miss fetches the real height
+/// mixed with `config.num_decoys` Laplace decoys in one batch, and a config
+/// with too few decoys, or no chain tip to draw them from, is refused.
+fn filter_with_cover<R: Rng>(
+    client: &QueryClient,
+    block_height: u32,
+    config: &QueryConfig,
+    rng: &mut R,
+) -> Result<Vec<u8>, QueryError> {
+    if let Some(data) = QueryClient::cached_filter(block_height) {
+        return Ok(data);
+    }
+    if config.num_decoys < MIN_DECOYS_PER_LOOKUP {
+        return Err(QueryError::Other(format!(
+            "refusing to fetch a block with {} decoys (minimum {})",
+            config.num_decoys, MIN_DECOYS_PER_LOOKUP
+        )));
+    }
+    if config.chain_tip < block_height {
+        return Err(QueryError::Other(
+            "refusing to fetch a block without a chain tip to draw decoys from".into(),
+        ));
+    }
+    let scale = if config.laplace_scale > 0.0 { config.laplace_scale } else { 5.0 };
+    let mut heights = cover_set(block_height, config.num_decoys, scale, config.chain_tip, rng);
+    if heights.len() < MIN_DECOYS_PER_LOOKUP + 1 {
+        return Err(QueryError::Other(
+            "could not draw enough distinct decoy heights; refusing to fetch the block alone".into(),
+        ));
+    }
+    heights.sort_unstable();
+
+    let batch = client.download_filters_batch(&heights)?;
+    let mut found = None;
+    for (h, data) in batch.filters {
+        if h == block_height {
+            found = Some(data.clone());
+        }
+        QueryClient::cache_filter(h, data);
+    }
+    found.ok_or_else(|| QueryError::Other(format!("no filter available for block {}", block_height)))
+}
+
+/// `block_height` plus up to `num_decoys` distinct Laplace decoys in `[1, tip]`.
+fn cover_set<R: Rng>(block_height: u32, num_decoys: usize, scale: f64, tip: u32, rng: &mut R) -> Vec<u32> {
+    perseverus_core::laplace::select_decoy_blocks(block_height, num_decoys, scale, 1, tip, rng)
 }
 
 /// Inspect the version byte and route to the v3 or v5 implementation.

@@ -368,6 +368,11 @@ impl QueryClient {
 
     /// Store filter bytes in the in-memory cache (used by the prefetch
     /// JNI call to warm the cache before queries start).
+    /// The cached filter for `height`, if any. Never touches the network.
+    pub fn cached_filter(height: u32) -> Option<Vec<u8>> {
+        filter_cache().lock().ok()?.get(&height).cloned()
+    }
+
     pub fn cache_filter(height: u32, data: Vec<u8>) {
         if let Ok(mut cache) = filter_cache().lock() {
             cache.insert(height, data);

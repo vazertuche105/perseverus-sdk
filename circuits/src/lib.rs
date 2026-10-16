@@ -1,20 +1,33 @@
-//! Groth16 zk-SNARK circuit for revocation-based token authentication (v10).
+//! Groth16 zk-SNARK circuit for revocation-based token authentication (v11).
 //!
 //! **BabyJubJub + BN254** — the proof system is Groth16 on BN254. BabyJubJub
 //! is a twisted Edwards curve embedded in BN254's scalar field:
 //! `Fq(BabyJubJub) = Fr(BN254)`, so in-circuit BabyJubJub point arithmetic
 //! is native field arithmetic — no non-native simulation needed.
 //!
-//! # Statement (v10 — Path-Bound SMT + Activation Epoch, Constant Server Key)
+//! # Statement (v11 — Signed Validity Window + Domain-Separated Nullifier)
 //!
-//! A prover holds a token `(P_i, σ_i)` where σ_i = v·P_i (server-signed).
-//! The prover demonstrates that:
+//! A prover holds a token `(P_i, σ_i)` where `σ_i = v·Q_i` and
+//! `Q_i = P_i + expiration_month·H_EXP + start_month·H_START` (server-signed,
+//! months chosen by the server). The prover demonstrates that:
 //! 1. They know the token's secret seed and can derive its base point
-//! 2. The token was legitimately signed by the server (DLEQ)
-//! 3. The token's nullifier is correctly computed
+//! 2. The token, *with its validity months*, was signed by the server (DLEQ on Q_i)
+//! 3. The token's nullifier is correctly computed (domain-separated from P_i)
 //! 4. The token has not expired (expiration_month ≥ current_month)
 //! 5. The token pack has activated (start_month ≤ current_month)
 //! 6. The token pack has NOT been revoked (SMT non-inclusion)
+//!
+//! ## v11 changes (security review F1 + F12)
+//! - **F1:** the months are bound to the signature. Up to v10 they were free
+//!   witnesses used only in the range checks, so any prover could pass ④⑤ by
+//!   claiming `expiration_month = start_month = current_month`. Now the
+//!   DLEQ is over `Q_i`, which the circuit rebuilds from the months.
+//!   Both months are range-checked to `MONTH_BITS` (18) so `m·H` cannot wrap.
+//! - **F12:** `nullifier = Poseidon(NULLIFIER_TAG, seed, pack_id, idx)`. Up to
+//!   v10 it was `Poseidon(seed, pack_id, idx)` — the very scalar `s` with
+//!   `P_i = s·H_TOKEN` — and the server sees `P_i` at issuance, so it could
+//!   link every spend to its purchase via `nullifier·H_TOKEN == P_i`.
+//! - Public inputs are unchanged: `(nullifier, current_month, revocation_root)`.
 //!
 //! ## Public inputs (3 Fr elements)
 //! - `nullifier`        — one-shot spend tag
@@ -43,11 +56,12 @@
 //!
 //! ## Derived in-circuit (not passed as inputs)
 //! - `P_i` = Poseidon(seed, pack_id, idx) · H_TOKEN
+//! - `Q_i` = P_i + expiration_month·H_EXP + start_month·H_START
 //!
 //! ## 6 Constraint Groups
-//! 1. **Base-Point Derivation**: derive P_i = Poseidon(seed, pack_id, idx)·H_TOKEN
-//! 2. **Nullifier Binding**: nullifier == Poseidon(token_seed, pack_id, token_index)
-//! 3. **DLEQ Signature**: σ_i = v·P_i via Chaum-Pedersen + Poseidon Fiat-Shamir
+//! 1. **Base-Point Derivation**: derive P_i, then the dated point Q_i
+//! 2. **Nullifier Binding**: nullifier == Poseidon(TAG, token_seed, pack_id, token_index)
+//! 3. **DLEQ Signature**: σ_i = v·Q_i via Chaum-Pedersen + Poseidon Fiat-Shamir
 //! 4. **Expiration Check**: expiration_month ≥ current_month
 //! 5. **Activation Check**: start_month ≤ current_month
 //! 6. **SMT Non-Inclusion**: pack's revocation key is NOT in the revocation tree
@@ -67,6 +81,7 @@ use ark_crypto_primitives::sponge::{
     constraints::CryptographicSpongeVar,
     poseidon::{constraints::PoseidonSpongeVar, PoseidonConfig},
 };
+use perseverus_core::h2c::MONTH_BITS;
 use perseverus_core::poseidon::{poseidon_config, PoseidonField};
 use perseverus_core::smt::SMT_DEPTH;
 
@@ -115,7 +130,7 @@ const EXPIRATION_BITS: usize = 18;
 #[derive(Clone)]
 pub struct RevocationSpendCircuit {
     // ── public inputs (3 Fr elements) ─────────────────────────────────────
-    /// One-shot nullifier = Poseidon(token_seed, pack_id, token_index).
+    /// One-shot nullifier = Poseidon(NULLIFIER_TAG, token_seed, pack_id, token_index).
     pub nullifier: Option<CircuitField>,
     /// Current month for expiration check (YYYYMM, global parameter).
     pub current_month: Option<CircuitField>,
@@ -134,7 +149,7 @@ pub struct RevocationSpendCircuit {
     pub pack_id: Option<CircuitField>,
     /// Which token in the pack is being spent.
     pub token_index: Option<CircuitField>,
-    /// Server-signed point σ_i = v·P_i.
+    /// Server-signed point σ_i = v·Q_i (v11: over the dated point).
     pub blinded_sig: Option<EdwardsProjective>,
     /// DLEQ challenge scalar (Poseidon Fiat-Shamir output).
     pub dleq_c: Option<CircuitField>,
@@ -263,15 +278,22 @@ impl ConstraintSynthesizer<CircuitField> for RevocationSpendCircuit {
 
         // ── dispatch to gadgets ───────────────────────────────────────────
 
-        // ① Base-Point Derivation: P_i = Poseidon(seed, pack_id, idx)·H_TOKEN
+        // ① Base-Point Derivation: P_i = Poseidon(seed, pack_id, idx)·H_TOKEN,
+        //   then the dated point Q_i = P_i + exp·H_EXP + start·H_START (v11, F1).
         let base_point_derived = gadgets::derive_base_point(
             cs.clone(),
             &token_seed,
             &pack_id,
             &token_index,
         )?;
+        let dated_point = gadgets::derive_dated_point(
+            cs.clone(),
+            &base_point_derived,
+            &expiration_month,
+            &start_month,
+        )?;
 
-        // ② Nullifier Binding: nullifier == Poseidon(token_seed, pack_id, token_index)
+        // ② Nullifier Binding: nullifier == Poseidon(TAG, token_seed, pack_id, token_index)
         gadgets::enforce_nullifier(
             cs.clone(),
             &nullifier,
@@ -280,10 +302,10 @@ impl ConstraintSynthesizer<CircuitField> for RevocationSpendCircuit {
             &token_index,
         )?;
 
-        // ③ DLEQ Signature Verification: proves σ_i = v·P_i
+        // ③ DLEQ Signature Verification: proves σ_i = v·Q_i
         gadgets::enforce_dleq_signature(
             cs.clone(),
-            &base_point_derived,
+            &dated_point,
             &blinded_sig,
             &dleq_c,
             &dleq_s,
@@ -389,9 +411,44 @@ pub mod gadgets {
         Ok(derived)
     }
 
-    /// Constraint ②: `nullifier == Poseidon(token_seed, pack_id, token_index)`.
+    /// Constraint ①b (v11): the dated point the server signed,
+    /// `Q_i = P_i + expiration_month·H_EXP + start_month·H_START`.
+    ///
+    /// Both months are range-checked to `MONTH_BITS` bits and multiplied using
+    /// only those bits, so `m·H` is the plain integer multiple and cannot wrap
+    /// the group order. Must match `perseverus_core::h2c::dated_token_point`.
+    pub fn derive_dated_point(
+        cs: ConstraintSystemRef<CircuitField>,
+        base_point: &EdwardsVar,
+        expiration_month: &FpVar<CircuitField>,
+        start_month: &FpVar<CircuitField>,
+    ) -> Result<EdwardsVar, SynthesisError> {
+        let exp_bits = month_bits(expiration_month)?;
+        let start_bits = month_bits(start_month)?;
+
+        let h_exp = EdwardsVar::new_constant(cs.clone(), perseverus_core::h2c::h_exp())?;
+        let h_start = EdwardsVar::new_constant(cs, perseverus_core::h2c::h_start())?;
+        let e_term = h_exp.scalar_mul_le(exp_bits.iter())?;
+        let s_term = h_start.scalar_mul_le(start_bits.iter())?;
+
+        Ok(base_point.clone() + e_term + s_term)
+    }
+
+    /// Decompose a month into exactly `MONTH_BITS` little-endian bits,
+    /// enforcing that every higher bit is zero.
+    fn month_bits(m: &FpVar<CircuitField>) -> Result<Vec<Boolean<CircuitField>>, SynthesisError> {
+        let bits = m.to_bits_le()?;
+        for bit in bits.iter().skip(MONTH_BITS) {
+            bit.enforce_equal(&Boolean::constant(false))?;
+        }
+        Ok(bits[..MONTH_BITS].to_vec())
+    }
+
+    /// Constraint ②: `nullifier == Poseidon(NULLIFIER_TAG, token_seed, pack_id, token_index)`.
     ///
     /// Absorb order must match `perseverus_core::nullifier::compute_nullifier`.
+    /// The leading tag (v11, F12) makes the nullifier unrelated to the scalar
+    /// behind `P_i`, which the server sees at issuance.
     pub fn enforce_nullifier(
         cs: ConstraintSystemRef<CircuitField>,
         nullifier: &FpVar<CircuitField>,
@@ -400,7 +457,12 @@ pub mod gadgets {
         token_index: &FpVar<CircuitField>,
     ) -> Result<(), SynthesisError> {
         let cfg: PoseidonConfig<PoseidonField> = poseidon_config();
+        let tag = FpVar::<CircuitField>::new_constant(
+            cs.clone(),
+            perseverus_core::nullifier::nullifier_tag(),
+        )?;
         let mut sponge = PoseidonSpongeVar::<CircuitField>::new(cs, &cfg);
+        sponge.absorb(&tag)?;
         sponge.absorb(token_seed)?;
         sponge.absorb(pack_id)?;
         sponge.absorb(token_index)?;
@@ -411,16 +473,17 @@ pub mod gadgets {
 
     /// Constraint ③: DLEQ Signature Verification (~6K constraints).
     ///
-    /// Proves σ_i = v·P_i using a Chaum-Pedersen proof with Poseidon Fiat-Shamir.
+    /// Proves σ_i = v·Q_i using a Chaum-Pedersen proof with Poseidon Fiat-Shamir.
+    /// (v11: `base_point` is the dated point Q_i, not P_i.)
     ///
     /// Verification:
     ///   R1' = s·G - c·PK_server
-    ///   R2' = s·P_i - c·σ_i
+    ///   R2' = s·Q_i - c·σ_i
     ///   c' = Poseidon(PK.x, PK.y, σ.x, σ.y, R1'.x, R1'.y, R2'.x, R2'.y)
     ///   Enforce: c == c'
     pub fn enforce_dleq_signature(
         cs: ConstraintSystemRef<CircuitField>,
-        base_point: &EdwardsVar,    // P_i (derived in-circuit)
+        base_point: &EdwardsVar,    // Q_i (dated point, derived in-circuit)
         blinded_sig: &EdwardsVar,   // σ_i (witness)
         dleq_c: &FpVar<CircuitField>,  // challenge scalar
         dleq_s: &FpVar<CircuitField>,  // response scalar
@@ -598,8 +661,7 @@ pub mod gadgets {
 mod tests {
     use super::*;
     use ark_ed_on_bn254::EdwardsProjective;
-    use ark_ec::{CurveGroup, PrimeGroup};
-    use ark_ff::PrimeField;
+    use ark_ec::PrimeGroup;
     use ark_relations::r1cs::ConstraintSystem;
     use ark_std::UniformRand;
     use perseverus_core::dleq::dleq_prove_poseidon;
@@ -607,6 +669,70 @@ mod tests {
     use perseverus_core::nullifier::compute_nullifier;
     use perseverus_core::poseidon::poseidon_config as pcfg;
     use perseverus_core::smt::{SparseMerkleTree, revocation_key};
+    use perseverus_core::dleq::PoseidonDleqProof;
+    use perseverus_core::h2c::dated_token_point;
+
+    /// Validity window used by the tests unless they say otherwise.
+    const EXP: u32 = 202612;
+    const START: u32 = 202601;
+
+    /// What the server does at issuance (v11): sign the dated point
+    /// Q = P + exp·H_EXP + start·H_START and prove it with a Poseidon DLEQ.
+    fn sign_dated<R: rand::Rng>(
+        secret: &ark_ed_on_bn254::Fr,
+        pk_server: &EdwardsProjective,
+        p_i: &EdwardsProjective,
+        exp: u32,
+        start: u32,
+        rng: &mut R,
+    ) -> (EdwardsProjective, PoseidonDleqProof) {
+        let q = dated_token_point(p_i, exp, start);
+        let sigma = q * *secret;
+        let proof = dleq_prove_poseidon(secret, &EdwardsProjective::generator(), pk_server, &q, &sigma, rng);
+        (sigma, proof)
+    }
+
+    /// A token the server signed for `[start, exp]`, and a circuit in which
+    /// the prover *claims* `[claimed_start, claimed_exp]` at `current_month`.
+    /// Returns whether the constraint system is satisfied.
+    fn spend_satisfied(
+        signed: (u32, u32),
+        claimed: (u64, u64),
+        current_month: u64,
+    ) -> bool {
+        let mut rng = ark_std::test_rng();
+        let v = ark_ed_on_bn254::Fr::rand(&mut rng);
+        let pk_server = EdwardsProjective::generator() * v;
+        let cfg = pcfg();
+        let seed = CircuitField::from(77u64);
+        let pack_id_f = CircuitField::from(4242u64);
+        let idx_f = CircuitField::from(5u64);
+
+        let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
+        let (sigma_i, dleq) = sign_dated(&v, &pk_server, &p_i, signed.0, signed.1, &mut rng);
+        let smt = SparseMerkleTree::new();
+        let proof = smt.prove_non_inclusion(revocation_key(&cfg, pack_id_f));
+
+        let circuit = RevocationSpendCircuit {
+            nullifier: Some(compute_nullifier(&cfg, seed, pack_id_f, idx_f)),
+            current_month: Some(CircuitField::from(current_month)),
+            revocation_root: Some(smt.root()),
+            pk_server,
+            token_seed: Some(seed),
+            pack_id: Some(pack_id_f),
+            token_index: Some(idx_f),
+            blinded_sig: Some(sigma_i),
+            dleq_c: Some(dleq.challenge),
+            dleq_s: Some(dleq.response),
+            expiration_month: Some(CircuitField::from(claimed.0)),
+            start_month: Some(CircuitField::from(claimed.1)),
+            smt_siblings: Some(proof.siblings),
+            smt_path_bits: Some(proof.path_bits),
+        };
+        let cs = ConstraintSystem::<CircuitField>::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+        cs.is_satisfied().unwrap()
+    }
 
     /// Build a valid v9 circuit with all 6 constraints. Expect `is_satisfied`.
     ///
@@ -633,10 +759,7 @@ mod tests {
 
         // Derive base point (v6: includes pack_id)
         let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
-        let sigma_i = p_i * v;
-
-        // Generate DLEQ proof
-        let dleq_proof = dleq_prove_poseidon(&v, &g_bjj, &pk_server, &p_i, &sigma_i, &mut rng);
+        let (sigma_i, dleq_proof) = sign_dated(&v, &pk_server, &p_i, EXP, START, &mut rng);
 
         // Compute nullifier (v6: uses token_seed)
         let null = compute_nullifier(&cfg, seed, pack_id_f, idx_f);
@@ -691,8 +814,7 @@ mod tests {
         let current_month: u64 = 202604;
 
         let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
-        let sigma_i = p_i * v;
-        let dleq_proof = dleq_prove_poseidon(&v, &g_bjj, &pk_server, &p_i, &sigma_i, &mut rng);
+        let (sigma_i, dleq_proof) = sign_dated(&v, &pk_server, &p_i, EXP, START, &mut rng);
         let null = compute_nullifier(&cfg, seed, pack_id_f, idx_f);
 
         // Insert OTHER packs into revocation tree
@@ -744,8 +866,7 @@ mod tests {
         let idx_f = CircuitField::from(0u64);
 
         let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
-        let sigma_i = p_i * v;
-        let dleq_proof = dleq_prove_poseidon(&v, &g_bjj, &pk_server, &p_i, &sigma_i, &mut rng);
+        let (sigma_i, dleq_proof) = sign_dated(&v, &pk_server, &p_i, EXP, START, &mut rng);
 
         let smt = SparseMerkleTree::new();
         let rev_key = revocation_key(&cfg, pack_id_f);
@@ -790,8 +911,7 @@ mod tests {
         let current_month: u64 = 202604;    // current is later
 
         let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
-        let sigma_i = p_i * v;
-        let dleq_proof = dleq_prove_poseidon(&v, &g_bjj, &pk_server, &p_i, &sigma_i, &mut rng);
+        let (sigma_i, dleq_proof) = sign_dated(&v, &pk_server, &p_i, expiration_month, START, &mut rng);
         let null = compute_nullifier(&cfg, seed, pack_id_f, idx_f);
 
         let smt = SparseMerkleTree::new();
@@ -836,9 +956,7 @@ mod tests {
         let idx_f = CircuitField::from(0u64);
 
         let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
-        let sigma_i = p_i * v;
-        // Generate DLEQ proof with WRONG key
-        let dleq_proof = dleq_prove_poseidon(&v_wrong, &g_bjj, &pk_server, &p_i, &sigma_i, &mut rng);
+        let (sigma_i, dleq_proof) = sign_dated(&v_wrong, &pk_server, &p_i, EXP, START, &mut rng);
         let null = compute_nullifier(&cfg, seed, pack_id_f, idx_f);
 
         let smt = SparseMerkleTree::new();
@@ -884,8 +1002,7 @@ mod tests {
         let idx_f = CircuitField::from(0u64);
 
         let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
-        let sigma_i = p_i * v;
-        let dleq_proof = dleq_prove_poseidon(&v, &g_bjj, &pk_server, &p_i, &sigma_i, &mut rng);
+        let (sigma_i, dleq_proof) = sign_dated(&v, &pk_server, &p_i, EXP, START, &mut rng);
         let null = compute_nullifier(&cfg, seed, pack_id_f, idx_f);
 
         // Revoke our pack
@@ -923,13 +1040,91 @@ mod tests {
         );
     }
 
+    // ── v11 soundness: the prover cannot choose its own months (F1) ─────────
+
+    /// Control: an honest prover inside its signed window is accepted.
+    #[test]
+    fn v11_honest_prover_in_window_accepted() {
+        assert!(spend_satisfied((202605, 202605), (202605, 202605), 202605));
+        assert!(spend_satisfied((202612, 202601), (202612, 202601), 202606));
+    }
+
+    /// The v10 attack: a pack signed for May 2026, spent in October 2026 by
+    /// claiming the expiry is still in the future. v10 accepted this.
+    #[test]
+    fn v11_lying_about_expiration_rejected() {
+        // Honest months: expired, so the range check fails.
+        assert!(!spend_satisfied((202605, 202605), (202605, 202605), 202610));
+        // Lying months: range check passes, but Q no longer matches the signature.
+        assert!(!spend_satisfied((202605, 202605), (202612, 202605), 202610));
+        assert!(!spend_satisfied((202605, 202605), (202610, 202610), 202610));
+    }
+
+    /// Yearly plan: the November pack must not be spendable in June by
+    /// claiming an earlier start month. v10 accepted this.
+    #[test]
+    fn v11_lying_about_activation_rejected() {
+        assert!(!spend_satisfied((202611, 202611), (202611, 202611), 202606));
+        assert!(!spend_satisfied((202611, 202611), (202611, 202601), 202606));
+        assert!(!spend_satisfied((202611, 202611), (202606, 202606), 202606));
+        // Control: the same pack in its own month works.
+        assert!(spend_satisfied((202611, 202611), (202611, 202611), 202611));
+    }
+
+    /// A month outside 18 bits is refused outright, so a prover cannot pick a
+    /// value that wraps to the same point modulo the group order.
+    #[test]
+    fn v11_out_of_range_month_rejected() {
+        let wrapped = 202612u64 + (1u64 << perseverus_core::h2c::MONTH_BITS);
+        assert!(!spend_satisfied((202612, 202601), (wrapped, 202601), 202606));
+    }
+
+    /// F12: the old (v10) nullifier — the bare base-point scalar — must not
+    /// satisfy the circuit; only the domain-separated one does.
+    #[test]
+    fn v11_untagged_nullifier_rejected() {
+        let mut rng = ark_std::test_rng();
+        let v = ark_ed_on_bn254::Fr::rand(&mut rng);
+        let pk_server = EdwardsProjective::generator() * v;
+        let cfg = pcfg();
+        let seed = CircuitField::from(77u64);
+        let pack_id_f = CircuitField::from(4242u64);
+        let idx_f = CircuitField::from(5u64);
+        let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
+        let (sigma_i, dleq) = sign_dated(&v, &pk_server, &p_i, EXP, START, &mut rng);
+        let smt = SparseMerkleTree::new();
+        let proof = smt.prove_non_inclusion(revocation_key(&cfg, pack_id_f));
+
+        let v10_nullifier =
+            perseverus_core::poseidon::poseidon_hash_many(&cfg, &[seed, pack_id_f, idx_f]);
+        let circuit = RevocationSpendCircuit {
+            nullifier: Some(v10_nullifier),
+            current_month: Some(CircuitField::from(202606u64)),
+            revocation_root: Some(smt.root()),
+            pk_server,
+            token_seed: Some(seed),
+            pack_id: Some(pack_id_f),
+            token_index: Some(idx_f),
+            blinded_sig: Some(sigma_i),
+            dleq_c: Some(dleq.challenge),
+            dleq_s: Some(dleq.response),
+            expiration_month: Some(CircuitField::from(EXP as u64)),
+            start_month: Some(CircuitField::from(START as u64)),
+            smt_siblings: Some(proof.siblings),
+            smt_path_bits: Some(proof.path_bits),
+        };
+        let cs = ConstraintSystem::<CircuitField>::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+        assert!(!cs.is_satisfied().unwrap(), "the untagged v10 nullifier must be rejected");
+    }
+
     /// Quick constraint-count diagnostic.
     #[test]
     fn constraint_count() {
         let (nc, nw, ni) = RevocationSpendCircuit::measure_size();
         println!();
         println!("  ══════════════════════════════════════");
-        println!("  RevocationSpendCircuit v9");
+        println!("  RevocationSpendCircuit v11");
         println!("  ──────────────────────────────────────");
         println!("  Constraints:      {}", nc);
         println!("  Witness vars:     {}", nw);
@@ -977,8 +1172,7 @@ mod tests {
         let idx_f = CircuitField::from(3u64);
 
         let p_i = token_base_point(&cfg, seed, pack_id_f, idx_f);
-        let sigma_i = p_i * secret;  // sign with real key
-        let dleq_proof = dleq_prove_poseidon(&secret, &g_bjj, &pk_server, &p_i, &sigma_i, &mut rng);
+        let (sigma_i, dleq_proof) = sign_dated(&secret, &pk_server, &p_i, EXP, START, &mut rng);
         let null = compute_nullifier(&cfg, seed, pack_id_f, idx_f);
 
         let smt = SparseMerkleTree::new();

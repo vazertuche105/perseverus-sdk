@@ -34,6 +34,17 @@ const DST_H_TOKEN: &[u8] = b"Perseverus-V3-HTOKEN-BabyJubJub_SHA256_TAI_";
 /// choosing a human-readable one makes the construction auditable.
 const H_TOKEN_LABEL: &[u8] = b"perseverus-h-token-nums-generator-v3";
 
+/// Domain separation tag and labels for the v11 validity generators. See
+/// [`h_exp`], [`h_start`] and [`dated_token_point`].
+const DST_H_VALIDITY: &[u8] = b"Perseverus-V11-HVALIDITY-BabyJubJub_SHA256_TAI_";
+const H_EXP_LABEL: &[u8] = b"perseverus-h-expiration-month-nums-generator-v11";
+const H_START_LABEL: &[u8] = b"perseverus-h-start-month-nums-generator-v11";
+
+/// Bit width of a validity month (YYYYMM). 18 bits holds values up to
+/// 262143, so every YYYYMM up to year 2621 fits. The circuit range-checks
+/// both months to exactly this width.
+pub const MONTH_BITS: usize = 18;
+
 /// Hash arbitrary data to a BabyJubJub point using the VOPRF domain.
 ///
 /// This is H2C(data) in the whitepaper. Used for:
@@ -160,10 +171,73 @@ pub fn token_base_point(
     acc
 }
 
+/// NUMS generator for the expiration month (v11). Independent of `G`,
+/// `H_TOKEN` and [`h_start`]: nobody knows a discrete log between any two.
+pub fn h_exp() -> EdwardsProjective {
+    hash_to_curve_with_dst(H_EXP_LABEL, DST_H_VALIDITY)
+}
+
+/// NUMS generator for the activation (start) month (v11).
+pub fn h_start() -> EdwardsProjective {
+    hash_to_curve_with_dst(H_START_LABEL, DST_H_VALIDITY)
+}
+
+/// The point the server actually signs in v11:
+///
+/// ```text
+/// Q = P + expiration_month·H_EXP + start_month·H_START
+/// ```
+///
+/// The server sees `P` at issuance, chooses both months itself from the
+/// plan that was paid for, and signs `Q`. The spend circuit rebuilds `Q`
+/// from the witness months, so a prover that claims other months produces a
+/// different `Q` and the DLEQ fails. This is the F1 fix: before v11 the
+/// months were free witnesses bound to nothing.
+///
+/// Months must be below `2^MONTH_BITS`; the multiplication uses the plain
+/// integer value, exactly like the in-circuit 18-bit `scalar_mul_le`.
+pub fn dated_token_point(
+    p: &EdwardsProjective,
+    expiration_month: u32,
+    start_month: u32,
+) -> EdwardsProjective {
+    assert!(
+        (expiration_month as u64) < (1u64 << MONTH_BITS)
+            && (start_month as u64) < (1u64 << MONTH_BITS),
+        "validity months must fit in {} bits",
+        MONTH_BITS
+    );
+    let e = ark_ed_on_bn254::Fr::from(expiration_month as u64);
+    let s = ark_ed_on_bn254::Fr::from(start_month as u64);
+    *p + h_exp() * e + h_start() * s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_ec::CurveGroup;
+    use ark_ec::{CurveGroup, PrimeGroup};
+
+    #[test]
+    fn validity_generators_are_distinct_and_in_subgroup() {
+        let pts = [h_token(), h_exp(), h_start(), EdwardsProjective::generator()];
+        for (i, a) in pts.iter().enumerate() {
+            let aa = a.into_affine();
+            assert!(aa.is_on_curve() && aa.is_in_correct_subgroup_assuming_on_curve());
+            for b in pts.iter().skip(i + 1) {
+                assert_ne!(aa, b.into_affine());
+            }
+        }
+    }
+
+    #[test]
+    fn dated_point_depends_on_both_months() {
+        let p = h_token() * ark_ed_on_bn254::Fr::from(12345u64);
+        let q = dated_token_point(&p, 202612, 202601).into_affine();
+        assert_ne!(q, dated_token_point(&p, 202701, 202601).into_affine());
+        assert_ne!(q, dated_token_point(&p, 202612, 202602).into_affine());
+        // Swapping the two months must not give the same point.
+        assert_ne!(q, dated_token_point(&p, 202601, 202612).into_affine());
+    }
 
     #[test]
     fn test_hash_to_curve_deterministic() {

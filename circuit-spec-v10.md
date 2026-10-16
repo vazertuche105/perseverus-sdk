@@ -1,4 +1,20 @@
-# Perseverus ZK-SNARK Circuit Specification — v10
+# Perseverus ZK-SNARK Circuit Specification — v10 (v11 changes below)
+
+## v11 changes (draft, security review F1 + F12)
+
+v11 keeps the three public inputs `(nullifier, current_month, revocation_root)` and changes two things. Both need a new trusted setup; do them in one.
+
+1. **Validity months are signed (F1).** In v10, `expiration_month` and `start_month` were witnesses used only in the range checks, so a prover could claim any months and pass ④⑤. In v11 the server signs the dated point
+
+   `Q_i = P_i + expiration_month·H_EXP + start_month·H_START`
+
+   with months it chooses from the plan that was paid for (`H_EXP`, `H_START` are new NUMS points, `core/src/h2c.rs`). The DLEQ ③ proves `σ_i = v·Q_i`, and the circuit rebuilds `Q_i` from the witness months, each range-checked to 18 bits. A prover claiming other months gets a different `Q_i` and the DLEQ fails.
+2. **Nullifier is domain-separated (F12).** In v10, `nullifier = Poseidon(seed, pack_id, idx)` was the same scalar `s` as in `P_i = s·H_TOKEN`, and the server sees `P_i` at issuance, so `nullifier·H_TOKEN == P_i` linked every spend to its purchase. In v11, `nullifier = Poseidon(NULLIFIER_TAG, seed, pack_id, idx)` (`core/src/nullifier.rs`).
+
+Issuance response gains `sigmas` (`σ_i = v·Q_i`), `expiration_month` and `start_month`; the wallet verifies each Poseidon DLEQ against the `Q_i` it rebuilds itself. The server must also check `current_month` against its own clock at spend time (review F13); that is a server change, not a circuit one.
+
+Measured on a 2-core cloud machine: **22,601 constraints, setup 1.3 s, proving key 4.3 MB, one proof 1.0 s** (`cargo run --release -p perseverus-circuits --example setup_bench`).
+
 
 ## Overview
 

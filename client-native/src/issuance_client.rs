@@ -104,6 +104,62 @@ struct IssueResponseWire {
     /// One-time board ticket (card packs only; absent on older servers).
     #[serde(default)]
     board_ticket: Option<String>,
+    /// v11: `σ_i = v·Q_i` over the dated point. Absent from a pre-v11
+    /// server, in which case finalize fails (its keys don't match anyway).
+    #[serde(default)]
+    sigmas: Vec<String>,
+    /// v11: the validity window the server signed into every token.
+    #[serde(default)]
+    expiration_month: u32,
+    #[serde(default)]
+    start_month: u32,
+}
+
+/// Decode one issuance response (any route) into a [`PackResponse`].
+fn decode_issue_response(
+    wire: &IssueResponseWire,
+    expected: usize,
+) -> Result<PackResponse, IssuanceClientError> {
+    if wire.betas.len() != expected {
+        return Err(IssuanceClientError::Crypto(
+            PerseverusError::BatchedDleqVerificationFailed,
+        ));
+    }
+    let point = |what: &str, i: usize, h: &str| -> Result<G1Projective, IssuanceClientError> {
+        let bytes = hex::decode(h)
+            .map_err(|e| IssuanceClientError::ArkSerde(format!("{}[{}] hex: {}", what, i, e)))?;
+        Ok(G1Affine::deserialize_compressed(&bytes[..])?.into())
+    };
+    let betas = wire.betas.iter().enumerate()
+        .map(|(i, h)| point("beta", i, h)).collect::<Result<Vec<_>, _>>()?;
+    let sigmas = wire.sigmas.iter().enumerate()
+        .map(|(i, h)| point("sigma", i, h)).collect::<Result<Vec<_>, _>>()?;
+
+    let challenge = Fr::deserialize_compressed(&hex::decode(&wire.proof_challenge)?[..])?;
+    let response = Fr::deserialize_compressed(&hex::decode(&wire.proof_response)?[..])?;
+
+    let mut poseidon_proofs = Vec::with_capacity(wire.poseidon_proofs.len());
+    for (i, [c_hex, s_hex]) in wire.poseidon_proofs.iter().enumerate() {
+        let c_bytes = hex::decode(c_hex).map_err(|e| {
+            IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] challenge hex: {}", i, e))
+        })?;
+        let s_bytes = hex::decode(s_hex).map_err(|e| {
+            IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] response hex: {}", i, e))
+        })?;
+        poseidon_proofs.push(PoseidonDleqProof {
+            challenge: PoseidonField::deserialize_compressed(&c_bytes[..])?,
+            response: PoseidonField::deserialize_compressed(&s_bytes[..])?,
+        });
+    }
+
+    Ok(PackResponse {
+        betas,
+        proof: DleqProof { challenge, response },
+        sigmas,
+        poseidon_proofs,
+        expiration_month: wire.expiration_month,
+        start_month: wire.start_month,
+    })
 }
 
 // Stripe redemption wire shape — kept in lockstep with the server's stripe.rs.
@@ -783,32 +839,7 @@ impl IssuanceClient {
         let mut out = Vec::with_capacity(resp_wire.packs.len());
         for (pi, w) in resp_wire.packs.iter().enumerate() {
             self.remember_ticket(prepared[pi].1.pack_id, &w.board_ticket);
-            let expected = prepared[pi].0.alphas.len();
-            if w.betas.len() != expected {
-                return Err(IssuanceClientError::Crypto(
-                    PerseverusError::BatchedDleqVerificationFailed));
-            }
-            let mut betas: Vec<G1Projective> = Vec::with_capacity(w.betas.len());
-            for (i, h) in w.betas.iter().enumerate() {
-                let bytes = hex::decode(h).map_err(|e|
-                    IssuanceClientError::ArkSerde(format!("pack{} beta{} hex: {}", pi, i, e)))?;
-                betas.push(G1Affine::deserialize_compressed(&bytes[..])?.into());
-            }
-            let cb = hex::decode(&w.proof_challenge)?;
-            let rb = hex::decode(&w.proof_response)?;
-            let challenge = Fr::deserialize_compressed(&cb[..])?;
-            let response = Fr::deserialize_compressed(&rb[..])?;
-            let mut pproofs = Vec::with_capacity(w.poseidon_proofs.len());
-            for [c_hex, s_hex] in &w.poseidon_proofs {
-                let c = PoseidonField::deserialize_compressed(&hex::decode(c_hex)?[..])?;
-                let s = PoseidonField::deserialize_compressed(&hex::decode(s_hex)?[..])?;
-                pproofs.push(PoseidonDleqProof { challenge: c, response: s });
-            }
-            out.push(PackResponse {
-                betas,
-                proof: DleqProof { challenge, response },
-                poseidon_proofs: pproofs,
-            });
+            out.push(decode_issue_response(w, prepared[pi].0.alphas.len())?);
         }
         Ok(out)
     }
@@ -850,54 +881,7 @@ impl IssuanceClient {
 
         let wire: IssueResponseWire = http_resp.json()?;
         self.remember_ticket(secrets.pack_id, &wire.board_ticket);
-
-        if wire.betas.len() != request.alphas.len() {
-            return Err(IssuanceClientError::Crypto(
-                PerseverusError::BatchedDleqVerificationFailed,
-            ));
-        }
-
-        // Decode β_i.
-        let mut betas: Vec<G1Projective> = Vec::with_capacity(wire.betas.len());
-        for (i, hex_str) in wire.betas.iter().enumerate() {
-            let bytes = hex::decode(hex_str)
-                .map_err(|e| {
-                    IssuanceClientError::ArkSerde(format!(
-                        "beta[{}] hex: {}",
-                        i, e
-                    ))
-                })?;
-            let affine = G1Affine::deserialize_compressed(&bytes[..])?;
-            betas.push(affine.into());
-        }
-
-        let challenge_bytes = hex::decode(&wire.proof_challenge)?;
-        let response_bytes = hex::decode(&wire.proof_response)?;
-        let challenge = Fr::deserialize_compressed(&challenge_bytes[..])?;
-        let response = Fr::deserialize_compressed(&response_bytes[..])?;
-
-        // Decode per-token Poseidon DLEQ proofs.
-        let mut poseidon_proofs = Vec::with_capacity(wire.poseidon_proofs.len());
-        for (i, [c_hex, s_hex]) in wire.poseidon_proofs.iter().enumerate() {
-            let c_bytes = hex::decode(c_hex).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] challenge hex: {}", i, e))
-            })?;
-            let s_bytes = hex::decode(s_hex).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] response hex: {}", i, e))
-            })?;
-            let c = PoseidonField::deserialize_compressed(&c_bytes[..])?;
-            let s = PoseidonField::deserialize_compressed(&s_bytes[..])?;
-            poseidon_proofs.push(PoseidonDleqProof { challenge: c, response: s });
-        }
-
-        Ok(PackResponse {
-            betas,
-            proof: DleqProof {
-                challenge,
-                response,
-            },
-            poseidon_proofs,
-        })
+        decode_issue_response(&wire, request.alphas.len())
     }
 
     /// Send blinded tokens + redemption code to `/stripe/redeem`.
@@ -942,48 +926,7 @@ impl IssuanceClient {
         // Response is the same shape as IssueResponseWire.
         let wire: IssueResponseWire = http_resp.json()?;
         self.remember_ticket(secrets.pack_id, &wire.board_ticket);
-
-        if wire.betas.len() != request.alphas.len() {
-            return Err(IssuanceClientError::Crypto(
-                PerseverusError::BatchedDleqVerificationFailed,
-            ));
-        }
-
-        // Decode β_i.
-        let mut betas: Vec<G1Projective> = Vec::with_capacity(wire.betas.len());
-        for (i, hex_str) in wire.betas.iter().enumerate() {
-            let bytes = hex::decode(hex_str)
-                .map_err(|e| {
-                    IssuanceClientError::ArkSerde(format!("beta[{}] hex: {}", i, e))
-                })?;
-            let affine = G1Affine::deserialize_compressed(&bytes[..])?;
-            betas.push(affine.into());
-        }
-
-        let challenge_bytes = hex::decode(&wire.proof_challenge)?;
-        let response_bytes = hex::decode(&wire.proof_response)?;
-        let challenge = Fr::deserialize_compressed(&challenge_bytes[..])?;
-        let response = Fr::deserialize_compressed(&response_bytes[..])?;
-
-        // Decode per-token Poseidon DLEQ proofs.
-        let mut poseidon_proofs = Vec::with_capacity(wire.poseidon_proofs.len());
-        for (i, [c_hex, s_hex]) in wire.poseidon_proofs.iter().enumerate() {
-            let c_bytes = hex::decode(c_hex).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] challenge hex: {}", i, e))
-            })?;
-            let s_bytes = hex::decode(s_hex).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] response hex: {}", i, e))
-            })?;
-            let c = PoseidonField::deserialize_compressed(&c_bytes[..])?;
-            let s = PoseidonField::deserialize_compressed(&s_bytes[..])?;
-            poseidon_proofs.push(PoseidonDleqProof { challenge: c, response: s });
-        }
-
-        Ok(PackResponse {
-            betas,
-            proof: DleqProof { challenge, response },
-            poseidon_proofs,
-        })
+        decode_issue_response(&wire, request.alphas.len())
     }
 
     /// POST blinded points + a BTC proof-of-payment code to `/btc/redeem`.
@@ -1023,44 +966,7 @@ impl IssuanceClient {
 
         let wire: IssueResponseWire = http_resp.json()?;
         self.remember_ticket(secrets.pack_id, &wire.board_ticket);
-        if wire.betas.len() != request.alphas.len() {
-            return Err(IssuanceClientError::Crypto(
-                PerseverusError::BatchedDleqVerificationFailed,
-            ));
-        }
-
-        let mut betas: Vec<G1Projective> = Vec::with_capacity(wire.betas.len());
-        for (i, hex_str) in wire.betas.iter().enumerate() {
-            let bytes = hex::decode(hex_str).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("beta[{}] hex: {}", i, e))
-            })?;
-            let affine = G1Affine::deserialize_compressed(&bytes[..])?;
-            betas.push(affine.into());
-        }
-
-        let challenge_bytes = hex::decode(&wire.proof_challenge)?;
-        let response_bytes = hex::decode(&wire.proof_response)?;
-        let challenge = Fr::deserialize_compressed(&challenge_bytes[..])?;
-        let response = Fr::deserialize_compressed(&response_bytes[..])?;
-
-        let mut poseidon_proofs = Vec::with_capacity(wire.poseidon_proofs.len());
-        for (i, [c_hex, s_hex]) in wire.poseidon_proofs.iter().enumerate() {
-            let c_bytes = hex::decode(c_hex).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] challenge hex: {}", i, e))
-            })?;
-            let s_bytes = hex::decode(s_hex).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] response hex: {}", i, e))
-            })?;
-            let c = PoseidonField::deserialize_compressed(&c_bytes[..])?;
-            let s = PoseidonField::deserialize_compressed(&s_bytes[..])?;
-            poseidon_proofs.push(PoseidonDleqProof { challenge: c, response: s });
-        }
-
-        Ok(PackResponse {
-            betas,
-            proof: DleqProof { challenge, response },
-            poseidon_proofs,
-        })
+        decode_issue_response(&wire, request.alphas.len())
     }
 
     /// POST blinded points + a Lightning claim nonce to `/ln/claim`.
@@ -1100,43 +1006,6 @@ impl IssuanceClient {
 
         let wire: IssueResponseWire = http_resp.json()?;
         self.remember_ticket(secrets.pack_id, &wire.board_ticket);
-        if wire.betas.len() != request.alphas.len() {
-            return Err(IssuanceClientError::Crypto(
-                PerseverusError::BatchedDleqVerificationFailed,
-            ));
-        }
-
-        let mut betas: Vec<G1Projective> = Vec::with_capacity(wire.betas.len());
-        for (i, hex_str) in wire.betas.iter().enumerate() {
-            let bytes = hex::decode(hex_str).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("beta[{}] hex: {}", i, e))
-            })?;
-            let affine = G1Affine::deserialize_compressed(&bytes[..])?;
-            betas.push(affine.into());
-        }
-
-        let challenge_bytes = hex::decode(&wire.proof_challenge)?;
-        let response_bytes = hex::decode(&wire.proof_response)?;
-        let challenge = Fr::deserialize_compressed(&challenge_bytes[..])?;
-        let response = Fr::deserialize_compressed(&response_bytes[..])?;
-
-        let mut poseidon_proofs = Vec::with_capacity(wire.poseidon_proofs.len());
-        for (i, [c_hex, s_hex]) in wire.poseidon_proofs.iter().enumerate() {
-            let c_bytes = hex::decode(c_hex).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] challenge hex: {}", i, e))
-            })?;
-            let s_bytes = hex::decode(s_hex).map_err(|e| {
-                IssuanceClientError::ArkSerde(format!("poseidon_proof[{}] response hex: {}", i, e))
-            })?;
-            let c = PoseidonField::deserialize_compressed(&c_bytes[..])?;
-            let s = PoseidonField::deserialize_compressed(&s_bytes[..])?;
-            poseidon_proofs.push(PoseidonDleqProof { challenge: c, response: s });
-        }
-
-        Ok(PackResponse {
-            betas,
-            proof: DleqProof { challenge, response },
-            poseidon_proofs,
-        })
+        decode_issue_response(&wire, request.alphas.len())
     }
 }

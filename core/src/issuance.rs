@@ -38,11 +38,23 @@
 //! - pack_id now generated as a simple random u64 (no Pedersen wrapper).
 //! - Base-point derivation includes pack_id: P_i = Poseidon(seed, pack_id, i)·H
 //!
-//! ## Privacy invariant
+//! ## What the server sees (v11 — corrected; see security review F12)
 //!
-//! The server never sees `P_i`, `σ_i = v·P_i`, the `token_seed`, or the
-//! OPRF blinding scalars. It only sees the `α_i` on the way in and
-//! produces `β_i` on the way out.
+//! The server sees every base point `P_i` (it needs them to sign) and the
+//! signatures `σ_i = v·Q_i` it produces. It never sees the `token_seed`, the
+//! blinding scalars, or anything that lets it compute a nullifier: since v11
+//! the nullifier is a domain-separated Poseidon hash, not the scalar behind
+//! `P_i`, so a spend cannot be matched to the issuance that produced it.
+//! Up to v10 this comment claimed the server never saw `P_i`; that was false,
+//! and together with `nullifier == s` it linked every spend to its purchase.
+//!
+//! ## Validity months (v11 — security review F1)
+//!
+//! The server chooses `expiration_month` and `start_month` from the plan that
+//! was paid for and signs the dated point
+//! `Q_i = P_i + expiration_month·H_EXP + start_month·H_START`
+//! ([`crate::h2c::dated_token_point`]). The spend circuit rebuilds `Q_i` from
+//! the months, so a wallet cannot claim months the server did not sign.
 //!
 //! The `token_seed` and per-token blinds are kept in [`PackSecrets`],
 //! which must stay client-side for the life of the pack. Losing them
@@ -55,8 +67,8 @@ use ark_ff::UniformRand;
 use rand::Rng;
 
 use crate::dleq::{DleqProof, PoseidonDleqProof, dleq_prove_poseidon, dleq_verify_poseidon};
-use crate::h2c::token_base_point;
-use crate::oprf::{evaluate_batch, unblind_token, verify_batch, OprfServerKey};
+use crate::h2c::{dated_token_point, token_base_point};
+use crate::oprf::{evaluate_batch, verify_batch, OprfServerKey};
 use crate::poseidon::PoseidonField;
 use crate::token_pack::{Token, TokenPack, MAX_PACK_SIZE};
 use crate::types::PerseverusError;
@@ -99,10 +111,14 @@ pub struct PackSecrets {
 pub struct PackResponse {
     pub betas: Vec<G1Projective>,
     pub proof: DleqProof,
+    /// v11: the signed tokens, `σ_i = v·Q_i` over the dated point.
+    pub sigmas: Vec<G1Projective>,
     /// Per-token Poseidon DLEQ proofs for in-circuit verification.
-    /// Each proof proves σ_i = v·P_i using Poseidon Fiat-Shamir.
-    /// Generated alongside the batch proof.
+    /// v11: each proves `σ_i = v·Q_i` using Poseidon Fiat-Shamir.
     pub poseidon_proofs: Vec<PoseidonDleqProof>,
+    /// v11: the validity window the server chose and signed into every `Q_i`.
+    pub expiration_month: u32,
+    pub start_month: u32,
 }
 
 /// Final result of a successful issuance round (v6). All the state a
@@ -213,9 +229,12 @@ pub fn prepare_pack_request_with_pack_id<R: Rng>(
 /// Server evaluates a batch of blinded base points and returns the
 /// signed batch plus an aggregated DLEQ proof.
 ///
-/// Also generates per-token Poseidon DLEQ proofs for in-circuit
-/// verification. The server needs the raw base points `P_i` to generate
-/// these proofs — client must send them alongside the blinded `α_i`.
+/// v11: also signs each dated point `Q_i = P_i + exp·H_EXP + start·H_START`
+/// with months the server chose (from the plan that was paid for — never
+/// from the client), and returns `σ_i = v·Q_i` with a per-token Poseidon
+/// DLEQ proof for the spend circuit. The server needs the raw base points
+/// `P_i` for this; since v11 that is safe, because no spend input can be
+/// computed from them (see the module docs).
 ///
 /// The proof transcript is stable across runs for a fixed RNG, which
 /// is the guarantee the `DleqProof` API provides. Production servers
@@ -224,22 +243,25 @@ pub fn sign_pack_batch<R: Rng>(
     server_key: &OprfServerKey,
     alphas: &[G1Projective],
     base_points: &[G1Projective],
+    expiration_month: u32,
+    start_month: u32,
     rng: &mut R,
 ) -> PackResponse {
     let (betas, proof) = evaluate_batch(server_key, alphas, rng);
 
-    // Generate per-token Poseidon DLEQ proofs for in-circuit verification.
-    // Each proof proves σ_i = v·P_i using Poseidon Fiat-Shamir.
     let g = G1Projective::generator();
-    let poseidon_proofs: Vec<PoseidonDleqProof> = base_points
-        .iter()
-        .map(|p_i| {
-            let sigma_i = *p_i * server_key.secret;
-            dleq_prove_poseidon(&server_key.secret, &g, &server_key.pubkey, p_i, &sigma_i, rng)
-        })
-        .collect();
+    let mut sigmas = Vec::with_capacity(base_points.len());
+    let mut poseidon_proofs = Vec::with_capacity(base_points.len());
+    for p_i in base_points {
+        let q_i = dated_token_point(p_i, expiration_month, start_month);
+        let sigma_i = q_i * server_key.secret;
+        poseidon_proofs.push(dleq_prove_poseidon(
+            &server_key.secret, &g, &server_key.pubkey, &q_i, &sigma_i, rng,
+        ));
+        sigmas.push(sigma_i);
+    }
 
-    PackResponse { betas, proof, poseidon_proofs }
+    PackResponse { betas, proof, sigmas, poseidon_proofs, expiration_month, start_month }
 }
 
 // ─── Client-side: finalize ─────────────────────────────────────────
@@ -275,10 +297,21 @@ pub fn finalize_pack<R: Rng>(
             "PackSecrets length mismatch with PackRequest".into(),
         ));
     }
-    if response.poseidon_proofs.len() != request.alphas.len() {
+    if response.poseidon_proofs.len() != request.alphas.len()
+        || response.sigmas.len() != request.alphas.len()
+    {
         return Err(PerseverusError::SerializationError(
-            "Poseidon DLEQ proofs length mismatch with request".into(),
+            "Poseidon DLEQ proofs / sigmas length mismatch with request".into(),
         ));
+    }
+    // The server decides the validity window. The caller passes what it
+    // expects from the plan it bought; refuse a pack signed for anything else
+    // rather than store tokens the wallet would show with the wrong dates.
+    if response.expiration_month != expiration_month || response.start_month != start_month {
+        return Err(PerseverusError::SerializationError(format!(
+            "server signed months {}..={} but {}..={} was expected",
+            response.start_month, response.expiration_month, start_month, expiration_month
+        )));
     }
 
     // One aggregated DLEQ proof covers the whole batch. Any β_i
@@ -286,28 +319,21 @@ pub fn finalize_pack<R: Rng>(
     // fails with probability ≈ 1/|Fr|.
     verify_batch(server_pubkey, &request.alphas, &response.betas, &response.proof)?;
 
-    // Verify each per-token Poseidon DLEQ proof.
+    // v11: each token is σ_i = v·Q_i over the dated point. Verify every
+    // per-token Poseidon DLEQ against the Q_i we rebuild ourselves from our
+    // own P_i and the agreed months — exactly what the spend circuit will do.
     let g = G1Projective::generator();
-    for (i, (p_i, proof)) in secrets.base_points.iter()
-        .zip(response.poseidon_proofs.iter())
-        .enumerate()
-    {
-        // Compute σ_i by unblinding β_i
-        let sigma_i = unblind_token(&response.betas[i], &secrets.blinds[i])?;
-        dleq_verify_poseidon(proof, &g, server_pubkey, p_i, &sigma_i)
-            .map_err(|_| PerseverusError::DleqVerificationFailed)?;
-    }
-
-    // Unblind each token: σ_i = r_i⁻¹ · β_i = v · P_i.
     let mut tokens = Vec::with_capacity(request.alphas.len());
-    for ((p_i, r_i), beta_i) in secrets
+    for ((p_i, proof), sigma_i) in secrets
         .base_points
         .iter()
-        .zip(secrets.blinds.iter())
-        .zip(response.betas.iter())
+        .zip(response.poseidon_proofs.iter())
+        .zip(response.sigmas.iter())
     {
-        let sigma_i = unblind_token(beta_i, r_i)?;
-        tokens.push(Token::from_projective(*p_i, sigma_i));
+        let q_i = dated_token_point(p_i, expiration_month, start_month);
+        dleq_verify_poseidon(proof, &g, server_pubkey, &q_i, sigma_i)
+            .map_err(|_| PerseverusError::DleqVerificationFailed)?;
+        tokens.push(Token::from_projective(*p_i, *sigma_i));
     }
 
     // Fold into the fixed-depth pack Merkle tree.
@@ -344,7 +370,7 @@ mod tests {
         let server_key = OprfServerKey::generate(&mut rng);
 
         let (req, secrets) = prepare_pack_request(&cfg, 32, &mut rng).unwrap();
-        let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, &mut rng);
+        let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
         let issued =
             finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng).unwrap();
 
@@ -358,7 +384,8 @@ mod tests {
         let pack_id_f = PoseidonField::from(issued.pack_id);
         for (i, token) in issued.pack.tokens.iter().enumerate() {
             let p_i = token_base_point(&cfg, issued.token_seed, pack_id_f, PoseidonField::from(i as u64));
-            let expected_sigma = (p_i * server_key.secret).into_affine();
+            let q_i = dated_token_point(&p_i, 202612, 202612);
+            let expected_sigma = (q_i * server_key.secret).into_affine();
             assert_eq!(
                 token.blinded_sig, expected_sigma,
                 "token {} σ mismatch",
@@ -375,7 +402,7 @@ mod tests {
         let server_key = OprfServerKey::generate(&mut rng);
 
         let (req, secrets) = prepare_pack_request(&cfg, 50, &mut rng).unwrap();
-        let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, &mut rng);
+        let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
         let issued =
             finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng).unwrap();
 
@@ -392,7 +419,7 @@ mod tests {
         let attacker_pubkey = OprfServerKey::generate(&mut rng).pubkey;
 
         let (req, secrets) = prepare_pack_request(&cfg, 8, &mut rng).unwrap();
-        let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, &mut rng);
+        let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
 
         let err = finalize_pack(&cfg, &req, &secrets, &resp, &attacker_pubkey, 202612, 202612, &mut rng)
             .expect_err("different pubkey must break DLEQ");
@@ -407,7 +434,7 @@ mod tests {
         let wrong_key = OprfServerKey::generate(&mut rng);
 
         let (req, secrets) = prepare_pack_request(&cfg, 10, &mut rng).unwrap();
-        let mut resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, &mut rng);
+        let mut resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
 
         // Swap one β_i for one computed with a different key. Aggregated
         // DLEQ must fail even though 9/10 tokens are correctly signed.
@@ -425,12 +452,46 @@ mod tests {
         let server_key = OprfServerKey::generate(&mut rng);
 
         let (req, secrets) = prepare_pack_request(&cfg, 4, &mut rng).unwrap();
-        let mut resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, &mut rng);
+        let mut resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
         resp.betas.pop();
 
         let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng)
             .expect_err("length mismatch must fail");
         matches!(err, PerseverusError::BatchedDleqVerificationFailed);
+    }
+
+    /// v11 (F1): the wallet must not be able to relabel a pack's months.
+    /// Rewriting the months in the response breaks every per-token DLEQ,
+    /// because the proofs were made over Q_i with the server's months.
+    #[test]
+    fn relabelled_months_rejected() {
+        let mut rng = thread_rng();
+        let cfg = poseidon_config();
+        let server_key = OprfServerKey::generate(&mut rng);
+
+        let (req, secrets) = prepare_pack_request(&cfg, 4, &mut rng).unwrap();
+        let mut resp =
+            sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202605, 202605, &mut rng);
+        resp.expiration_month = 209912;
+
+        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 209912, 202605, &mut rng)
+            .expect_err("months the server did not sign must fail the DLEQ");
+        assert!(matches!(err, PerseverusError::DleqVerificationFailed), "{:?}", err);
+    }
+
+    /// v11: finalize refuses a pack signed for a different window than expected.
+    #[test]
+    fn unexpected_months_rejected() {
+        let mut rng = thread_rng();
+        let cfg = poseidon_config();
+        let server_key = OprfServerKey::generate(&mut rng);
+
+        let (req, secrets) = prepare_pack_request(&cfg, 4, &mut rng).unwrap();
+        let resp =
+            sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202605, 202605, &mut rng);
+        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202601, &mut rng)
+            .expect_err("a window mismatch must be refused");
+        assert!(matches!(err, PerseverusError::SerializationError(_)), "{:?}", err);
     }
 
     #[test]
@@ -458,7 +519,7 @@ mod tests {
         let server_key = OprfServerKey::generate(&mut rng);
 
         let (req, secrets) = prepare_pack_request(&cfg, 16, &mut rng).unwrap();
-        let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, &mut rng);
+        let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
         let issued =
             finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng).unwrap();
 
@@ -472,7 +533,7 @@ mod tests {
                 pack_id_f,
                 PoseidonField::from(i as u64),
             );
-            let sigma_i = p_i * server_key.secret;
+            let sigma_i = dated_token_point(&p_i, 202612, 202612) * server_key.secret;
             expected_tokens.push(Token::from_projective(p_i, sigma_i));
         }
         let expected_pack = TokenPack::build(&cfg, expected_tokens).unwrap();

@@ -479,7 +479,7 @@ pub mod gadgets {
     /// Verification:
     ///   R1' = s·G - c·PK_server
     ///   R2' = s·Q_i - c·σ_i
-    ///   c' = Poseidon(PK.x, PK.y, σ.x, σ.y, R1'.x, R1'.y, R2'.x, R2'.y)
+    ///   c' = Poseidon(TAG, PK, Q_i, σ_i, R1', R2')   (v11: tag + base point bound)
     ///   Enforce: c == c'
     pub fn enforce_dleq_signature(
         cs: ConstraintSystemRef<CircuitField>,
@@ -510,11 +510,20 @@ pub mod gadgets {
         // R2' = s·P_i - c·σ_i
         let r2_prime = s_pi - c_sigma;
 
-        // c' = Poseidon(PK.x, PK.y, σ.x, σ.y, R1'.x, R1'.y, R2'.x, R2'.y)
+        // c' = Poseidon(TAG, PK.x, PK.y, Q.x, Q.y, σ.x, σ.y, R1'.x, R1'.y, R2'.x, R2'.y)
+        // v11 (security review F9): the tag and the base point are bound too.
+        // Must match perseverus_core::dleq::poseidon_dleq_challenge.
         let cfg: PoseidonConfig<PoseidonField> = poseidon_config();
+        let tag = FpVar::<CircuitField>::new_constant(
+            cs.clone(),
+            perseverus_core::dleq::poseidon_dleq_tag(),
+        )?;
         let mut sponge = PoseidonSpongeVar::<CircuitField>::new(cs, &cfg);
+        sponge.absorb(&tag)?;
         sponge.absorb(&pk_server.x)?;
         sponge.absorb(&pk_server.y)?;
+        sponge.absorb(&base_point.x)?;
+        sponge.absorb(&base_point.y)?;
         sponge.absorb(&blinded_sig.x)?;
         sponge.absorb(&blinded_sig.y)?;
         sponge.absorb(&r1_prime.x)?;

@@ -2,7 +2,7 @@
 
 ## v11 changes (draft, security review F1 + F12)
 
-v11 keeps the three public inputs `(nullifier, current_month, revocation_root)` and changes three things. Both need a new trusted setup; do them in one.
+v11 keeps the three public inputs `(nullifier, current_month, revocation_root)` and changes three things. All need a new trusted setup; do them in one.
 
 1. **Validity months are signed (F1).** In v10, `expiration_month` and `start_month` were witnesses used only in the range checks, so a prover could claim any months and pass ④⑤. In v11 the server signs the dated point
 

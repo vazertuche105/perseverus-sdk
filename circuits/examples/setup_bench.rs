@@ -41,7 +41,7 @@ fn main() {
     let cfg = poseidon_config();
     let (req, secrets) = prepare_pack_request(&cfg, 4, &mut rng).unwrap();
     let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202605, 202605, &mut rng);
-    let issued = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202605, 202605, &mut rng)
+    let issued = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, &mut rng)
         .expect("finalize");
 
     let smt = SparseMerkleTree::new();

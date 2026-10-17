@@ -283,10 +283,19 @@ pub fn finalize_pack<R: Rng>(
     secrets: &PackSecrets,
     response: &PackResponse,
     server_pubkey: &G1Projective,
-    expiration_month: u32,
-    start_month: u32,
     _rng: &mut R,
 ) -> Result<IssuedPack, PerseverusError> {
+    // v11: the server chose the validity window and signed it into every
+    // token; the pack carries exactly those months. A wallet's own idea of
+    // the month can differ at a month boundary, so it is not compared — the
+    // DLEQ checks below are what bind the months to the signature.
+    let (expiration_month, start_month) = (response.expiration_month, response.start_month);
+    if expiration_month >= (1 << crate::h2c::MONTH_BITS) || start_month > expiration_month {
+        return Err(PerseverusError::SerializationError(format!(
+            "server returned an invalid validity window {}..={}",
+            start_month, expiration_month
+        )));
+    }
     if request.alphas.len() != response.betas.len() {
         return Err(PerseverusError::BatchedDleqVerificationFailed);
     }
@@ -304,15 +313,7 @@ pub fn finalize_pack<R: Rng>(
             "Poseidon DLEQ proofs / sigmas length mismatch with request".into(),
         ));
     }
-    // The server decides the validity window. The caller passes what it
-    // expects from the plan it bought; refuse a pack signed for anything else
-    // rather than store tokens the wallet would show with the wrong dates.
-    if response.expiration_month != expiration_month || response.start_month != start_month {
-        return Err(PerseverusError::SerializationError(format!(
-            "server signed months {}..={} but {}..={} was expected",
-            response.start_month, response.expiration_month, start_month, expiration_month
-        )));
-    }
+
 
     // One aggregated DLEQ proof covers the whole batch. Any β_i
     // computed with the wrong key poisons the aggregate and the proof
@@ -372,7 +373,7 @@ mod tests {
         let (req, secrets) = prepare_pack_request(&cfg, 32, &mut rng).unwrap();
         let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
         let issued =
-            finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng).unwrap();
+            finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, &mut rng).unwrap();
 
         assert_eq!(issued.token_seed, secrets.token_seed);
         assert_eq!(issued.pack.tokens.len(), 32);
@@ -404,7 +405,7 @@ mod tests {
         let (req, secrets) = prepare_pack_request(&cfg, 50, &mut rng).unwrap();
         let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
         let issued =
-            finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng).unwrap();
+            finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, &mut rng).unwrap();
 
         assert_eq!(issued.pack_id, secrets.pack_id);
         assert_eq!(issued.quota, 50);
@@ -421,7 +422,7 @@ mod tests {
         let (req, secrets) = prepare_pack_request(&cfg, 8, &mut rng).unwrap();
         let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
 
-        let err = finalize_pack(&cfg, &req, &secrets, &resp, &attacker_pubkey, 202612, 202612, &mut rng)
+        let err = finalize_pack(&cfg, &req, &secrets, &resp, &attacker_pubkey, &mut rng)
             .expect_err("different pubkey must break DLEQ");
         matches!(err, PerseverusError::BatchedDleqVerificationFailed);
     }
@@ -440,7 +441,7 @@ mod tests {
         // DLEQ must fail even though 9/10 tokens are correctly signed.
         resp.betas[5] = req.alphas[5] * wrong_key.secret;
 
-        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng)
+        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, &mut rng)
             .expect_err("poisoned beta must fail batched DLEQ");
         matches!(err, PerseverusError::BatchedDleqVerificationFailed);
     }
@@ -455,7 +456,7 @@ mod tests {
         let mut resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
         resp.betas.pop();
 
-        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng)
+        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, &mut rng)
             .expect_err("length mismatch must fail");
         matches!(err, PerseverusError::BatchedDleqVerificationFailed);
     }
@@ -474,24 +475,24 @@ mod tests {
             sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202605, 202605, &mut rng);
         resp.expiration_month = 209912;
 
-        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 209912, 202605, &mut rng)
+        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, &mut rng)
             .expect_err("months the server did not sign must fail the DLEQ");
         assert!(matches!(err, PerseverusError::DleqVerificationFailed), "{:?}", err);
     }
 
-    /// v11: finalize refuses a pack signed for a different window than expected.
+    /// v11: the pack carries the window the server signed, whatever month
+    /// the wallet thinks it is (e.g. a purchase right at a month boundary).
     #[test]
-    fn unexpected_months_rejected() {
+    fn pack_carries_server_months() {
         let mut rng = thread_rng();
         let cfg = poseidon_config();
         let server_key = OprfServerKey::generate(&mut rng);
 
         let (req, secrets) = prepare_pack_request(&cfg, 4, &mut rng).unwrap();
         let resp =
-            sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202605, 202605, &mut rng);
-        let err = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202601, &mut rng)
-            .expect_err("a window mismatch must be refused");
-        assert!(matches!(err, PerseverusError::SerializationError(_)), "{:?}", err);
+            sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202611, &mut rng);
+        let issued = finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, &mut rng).unwrap();
+        assert_eq!((issued.start_month, issued.expiration_month), (202611, 202612));
     }
 
     #[test]
@@ -521,7 +522,7 @@ mod tests {
         let (req, secrets) = prepare_pack_request(&cfg, 16, &mut rng).unwrap();
         let resp = sign_pack_batch(&server_key, &req.alphas, &secrets.base_points, 202612, 202612, &mut rng);
         let issued =
-            finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, 202612, 202612, &mut rng).unwrap();
+            finalize_pack(&cfg, &req, &secrets, &resp, &server_key.pubkey, &mut rng).unwrap();
 
         // Rebuild from scratch using only the secret seed + pack_id + server key.
         let pack_id_f = PoseidonField::from(issued.pack_id);

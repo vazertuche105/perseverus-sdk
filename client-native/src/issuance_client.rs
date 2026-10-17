@@ -47,6 +47,12 @@ use perseverus_core::issuance::{
 use perseverus_core::poseidon::PoseidonField;
 use perseverus_core::types::PerseverusError;
 
+// v11 note: the `expiration_month` / `start_month` / `schedule` arguments on
+// the issuance methods below are kept for API compatibility (JNI, SDK) but no
+// longer decide anything. The server picks each pack's validity window from
+// the plan that was paid for and signs it into the tokens; the returned
+// `IssuedPack` carries the server's months (security review F1).
+
 /// Published commitment response from the bulletin board.
 #[derive(Debug, Clone)]
 pub struct PublishResult {
@@ -389,8 +395,8 @@ impl IssuanceClient {
     pub fn issue_pack<R: Rng>(
         &self,
         n: usize,
-        expiration_month: u32,
-        start_month: u32,
+        _expiration_month: u32,
+        _start_month: u32,
         rng: &mut R,
     ) -> Result<IssuedPack, IssuanceClientError> {
         if n == 0 || n > MAX_TOKENS_PER_PACK {
@@ -419,8 +425,6 @@ impl IssuanceClient {
             &secrets,
             &response,
             &self.server_pubkey,
-            expiration_month,
-            start_month,
             rng,
         )?;
 
@@ -547,8 +551,8 @@ impl IssuanceClient {
     pub fn redeem_pack<R: Rng>(
         &self,
         n: usize,
-        expiration_month: u32,
-        start_month: u32,
+        _expiration_month: u32,
+        _start_month: u32,
         redemption_code: &str,
         rng: &mut R,
     ) -> Result<IssuedPack, IssuanceClientError> {
@@ -578,8 +582,6 @@ impl IssuanceClient {
             &secrets,
             &response,
             &self.server_pubkey,
-            expiration_month,
-            start_month,
             rng,
         )?;
 
@@ -592,8 +594,8 @@ impl IssuanceClient {
     pub fn redeem_pack_btc<R: Rng>(
         &self,
         n: usize,
-        expiration_month: u32,
-        start_month: u32,
+        _expiration_month: u32,
+        _start_month: u32,
         code: &str,
         rng: &mut R,
     ) -> Result<IssuedPack, IssuanceClientError> {
@@ -614,8 +616,6 @@ impl IssuanceClient {
             &secrets,
             &response,
             &self.server_pubkey,
-            expiration_month,
-            start_month,
             rng,
         )?;
         Ok(issued)
@@ -627,8 +627,8 @@ impl IssuanceClient {
     pub fn redeem_pack_ln<R: Rng>(
         &self,
         n: usize,
-        expiration_month: u32,
-        start_month: u32,
+        _expiration_month: u32,
+        _start_month: u32,
         nonce: &str,
         rng: &mut R,
     ) -> Result<IssuedPack, IssuanceClientError> {
@@ -649,8 +649,6 @@ impl IssuanceClient {
             &secrets,
             &response,
             &self.server_pubkey,
-            expiration_month,
-            start_month,
             rng,
         )?;
         Ok(issued)
@@ -695,10 +693,9 @@ impl IssuanceClient {
         // 3. Finalize each pack with its own activation/expiration months.
         let mut issued = Vec::with_capacity(prepared.len());
         for (i, (request, secrets)) in prepared.iter().enumerate() {
-            let (expiration_month, start_month) = schedule[i];
             issued.push(finalize_pack(
                 &self.poseidon, request, secrets, &responses[i],
-                &self.server_pubkey, expiration_month, start_month, rng,
+                &self.server_pubkey, rng,
             )?);
         }
         Ok(issued)
@@ -742,10 +739,9 @@ impl IssuanceClient {
         let responses = self.post_packs_keyed(&url, &body, &prepared, Some(&key), V1_REDEEM_ATTEMPTS)?;
         let mut issued = Vec::with_capacity(prepared.len());
         for (i, (request, secrets)) in prepared.iter().enumerate() {
-            let (expiration_month, start_month) = schedule[i];
             issued.push(finalize_pack(
                 &self.poseidon, request, secrets, &responses[i],
-                &self.server_pubkey, expiration_month, start_month, rng,
+                &self.server_pubkey, rng,
             )?);
         }
         Ok(issued)

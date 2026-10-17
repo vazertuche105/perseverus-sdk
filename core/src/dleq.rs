@@ -40,7 +40,7 @@ pub struct DleqProof {
 /// Protocol:
 ///   1. Pick random nonce r
 ///   2. R1 = r·G, R2 = r·α
-///   3. c = H(V || β || R1 || R2)
+///   3. c = H(DST || G || V || α || β || R1 || R2)   (v11: full statement)
 ///   4. s = r + c·k mod n
 pub fn dleq_prove<R: Rng>(
     secret: &Fr,         // k
@@ -57,8 +57,8 @@ pub fn dleq_prove<R: Rng>(
     let r1 = *g * r;
     let r2 = *alpha * r;
 
-    // Step 3: Fiat-Shamir challenge
-    let challenge = compute_challenge(v, beta, &r1, &r2);
+    // Step 3: Fiat-Shamir challenge over the whole statement (v11, F9)
+    let challenge = compute_challenge(g, v, alpha, beta, &r1, &r2);
 
     // Step 4: response
     let response = r + challenge * secret;
@@ -76,7 +76,7 @@ pub fn dleq_prove<R: Rng>(
 /// Recomputes:
 ///   R1' = s·G - c·V
 ///   R2' = s·α - c·β
-/// Then checks H(V || β || R1' || R2') == c
+/// Then checks H(DST || G || V || α || β || R1' || R2') == c
 pub fn dleq_verify(
     proof: &DleqProof,
     g: &G1Projective,
@@ -87,7 +87,7 @@ pub fn dleq_verify(
     let r1_prime = *g * proof.response - *v * proof.challenge;
     let r2_prime = *alpha * proof.response - *beta * proof.challenge;
 
-    let expected_challenge = compute_challenge(v, beta, &r1_prime, &r2_prime);
+    let expected_challenge = compute_challenge(g, v, alpha, beta, &r1_prime, &r2_prime);
 
     if proof.challenge == expected_challenge {
         Ok(())
@@ -99,7 +99,9 @@ pub fn dleq_verify(
 /// Generate a batched DLEQ proof for multiple (α_i, β_i) pairs.
 ///
 /// Uses the random-linear-combination trick (BLS-style):
-///   1. Compute per-pair challenges: c_i = H(i || α_i || β_i)
+///   1. Seed = H(DST_BATCH || G || V || n || α_1..α_n || β_1..β_n); c_i = H(seed || i)
+///      (v11, F9: every coefficient depends on the whole batch, so no single
+///      β_i can be chosen after seeing the others' coefficients)
 ///   2. Aggregate: α* = Σ c_i · α_i,  β* = Σ c_i · β_i
 ///   3. Produce one DLEQ proof for (G, V, α*, β*)
 ///
@@ -116,8 +118,8 @@ pub fn batched_dleq_prove<R: Rng>(
 ) -> DleqProof {
     assert_eq!(alphas.len(), betas.len(), "alphas and betas must have same length");
 
-    // Compute per-element challenge scalars
-    let coeffs = compute_batch_coefficients(alphas, betas);
+    // Compute per-element challenge scalars (bound to the whole batch)
+    let coeffs = compute_batch_coefficients(g, v, alphas, betas);
 
     // Aggregate
     let alpha_star = multi_scalar_mul(alphas, &coeffs);
@@ -137,7 +139,7 @@ pub fn batched_dleq_verify(
 ) -> Result<(), PerseverusError> {
     assert_eq!(alphas.len(), betas.len(), "alphas and betas must have same length");
 
-    let coeffs = compute_batch_coefficients(alphas, betas);
+    let coeffs = compute_batch_coefficients(g, v, alphas, betas);
 
     let alpha_star = multi_scalar_mul(alphas, &coeffs);
     let beta_star = multi_scalar_mul(betas, &coeffs);
@@ -164,28 +166,44 @@ pub fn batched_dleq_verify(
 /// raw Poseidon output; `response` holds an Fr(BJJ) value lifted to Fr(BN254).
 #[derive(Debug, Clone)]
 pub struct PoseidonDleqProof {
-    /// Challenge c = Poseidon(PK.x, PK.y, σ.x, σ.y, R1.x, R1.y, R2.x, R2.y)
+    /// Challenge c = Poseidon(TAG, PK, P, σ, R1, R2) — see [`poseidon_dleq_challenge`]
     pub challenge: PoseidonField,
     /// Response s = r + c_bjj · k (Fr(BJJ) value, stored as PoseidonField)
     pub response: PoseidonField,
 }
 
-/// Compute the Poseidon Fiat-Shamir challenge for DLEQ.
+/// Public label behind [`poseidon_dleq_tag`].
+const POSEIDON_DLEQ_TAG_LABEL: &[u8] = b"perseverus/dleq-poseidon/v11";
+
+/// Constant absorbed first into every Poseidon DLEQ challenge (v11). The
+/// spend circuit bakes in the same value.
+pub fn poseidon_dleq_tag() -> PoseidonField {
+    PoseidonField::from_be_bytes_mod_order(POSEIDON_DLEQ_TAG_LABEL)
+}
+
+/// Compute the Poseidon Fiat-Shamir challenge for DLEQ (v11, security review
+/// F9: binds the base point too, under a domain tag):
 ///
-/// c = Poseidon(PK.x, PK.y, sigma.x, sigma.y, R1.x, R1.y, R2.x, R2.y)
+/// c = Poseidon(TAG, PK.x, PK.y, P.x, P.y, σ.x, σ.y, R1.x, R1.y, R2.x, R2.y)
+///
+/// Must match `circuits::gadgets::enforce_dleq_signature` exactly.
 fn poseidon_dleq_challenge(
     pk: &G1Projective,
+    base: &G1Projective,
     sigma: &G1Projective,
     r1: &G1Projective,
     r2: &G1Projective,
 ) -> PoseidonField {
     let cfg = poseidon_config();
     let pk_a = pk.into_affine();
+    let base_a = base.into_affine();
     let sigma_a = sigma.into_affine();
     let r1_a = r1.into_affine();
     let r2_a = r2.into_affine();
     poseidon_hash_many(&cfg, &[
+        poseidon_dleq_tag(),
         pk_a.x, pk_a.y,
+        base_a.x, base_a.y,
         sigma_a.x, sigma_a.y,
         r1_a.x, r1_a.y,
         r2_a.x, r2_a.y,
@@ -233,7 +251,7 @@ pub fn dleq_prove_poseidon<R: Rng>(
     let r2 = *p_i * r;
 
     // Step 3: Poseidon Fiat-Shamir challenge (in Fr(BN254))
-    let c_bn = poseidon_dleq_challenge(pk, sigma_i, &r1, &r2);
+    let c_bn = poseidon_dleq_challenge(pk, p_i, sigma_i, &r1, &r2);
 
     // Step 4: reduce to Fr(BJJ) for scalar arithmetic
     let c_bjj = poseidon_field_to_bjj_scalar(&c_bn);
@@ -272,7 +290,7 @@ pub fn dleq_verify_poseidon(
     let r2_prime = *p_i * s_bjj - *sigma_i * c_bjj;
 
     // Recompute challenge
-    let expected_c = poseidon_dleq_challenge(pk, sigma_i, &r1_prime, &r2_prime);
+    let expected_c = poseidon_dleq_challenge(pk, p_i, sigma_i, &r1_prime, &r2_prime);
 
     if proof.challenge == expected_c {
         Ok(())
@@ -283,62 +301,62 @@ pub fn dleq_verify_poseidon(
 
 // ─── Internal helpers ───
 
-/// Compute the Fiat-Shamir challenge: c = H(V || β || R1 || R2) mod n
+/// Domain separation tags (v11). Distinct for the challenge and the batch
+/// coefficients, so a value hashed for one can never be replayed as the other.
+const DST_DLEQ: &[u8] = b"perseverus/dleq-sha256/v11";
+const DST_DLEQ_BATCH: &[u8] = b"perseverus/dleq-sha256-batch/v11";
+
+fn hash_point(hasher: &mut Sha256, p: &G1Projective) {
+    let mut buf = Vec::new();
+    p.into_affine().serialize_compressed(&mut buf).unwrap();
+    hasher.update(&buf);
+}
+
+/// Fiat-Shamir challenge over the full statement (v11, security review F9):
+/// c = H(DST || G || V || α || β || R1 || R2) mod n. Up to v10 this hashed only
+/// (V, β, R1, R2).
 fn compute_challenge(
+    g: &G1Projective,
     v: &G1Projective,
+    alpha: &G1Projective,
     beta: &G1Projective,
     r1: &G1Projective,
     r2: &G1Projective,
 ) -> Fr {
     let mut hasher = Sha256::new();
-
-    // Serialize each point to bytes and feed to hash
-    let mut buf = Vec::new();
-    v.into_affine().serialize_compressed(&mut buf).unwrap();
-    hasher.update(&buf);
-
-    buf.clear();
-    beta.into_affine().serialize_compressed(&mut buf).unwrap();
-    hasher.update(&buf);
-
-    buf.clear();
-    r1.into_affine().serialize_compressed(&mut buf).unwrap();
-    hasher.update(&buf);
-
-    buf.clear();
-    r2.into_affine().serialize_compressed(&mut buf).unwrap();
-    hasher.update(&buf);
-
-    let hash = hasher.finalize();
-
-    // Convert hash to scalar (mod curve order)
-    Fr::from_be_bytes_mod_order(&hash)
+    hasher.update(DST_DLEQ);
+    for p in [g, v, alpha, beta, r1, r2] {
+        hash_point(&mut hasher, p);
+    }
+    Fr::from_be_bytes_mod_order(&hasher.finalize())
 }
 
-/// Compute per-element challenge scalars for batched DLEQ.
-/// c_i = H(i || α_i || β_i)
+/// Per-element coefficients for batched DLEQ, all derived from one seed that
+/// commits to the whole batch: seed = H(DST_BATCH || G || V || n || α* || β*),
+/// c_i = H(DST_BATCH || seed || i).
 fn compute_batch_coefficients(
+    g: &G1Projective,
+    v: &G1Projective,
     alphas: &[G1Projective],
     betas: &[G1Projective],
 ) -> Vec<Fr> {
-    alphas
-        .iter()
-        .zip(betas.iter())
-        .enumerate()
-        .map(|(i, (alpha, beta))| {
-            let mut hasher = Sha256::new();
-            hasher.update(&(i as u64).to_le_bytes());
+    let mut seed_hasher = Sha256::new();
+    seed_hasher.update(DST_DLEQ_BATCH);
+    hash_point(&mut seed_hasher, g);
+    hash_point(&mut seed_hasher, v);
+    seed_hasher.update((alphas.len() as u64).to_le_bytes());
+    for p in alphas.iter().chain(betas.iter()) {
+        hash_point(&mut seed_hasher, p);
+    }
+    let seed = seed_hasher.finalize();
 
-            let mut buf = Vec::new();
-            alpha.into_affine().serialize_compressed(&mut buf).unwrap();
-            hasher.update(&buf);
-
-            buf.clear();
-            beta.into_affine().serialize_compressed(&mut buf).unwrap();
-            hasher.update(&buf);
-
-            let hash = hasher.finalize();
-            Fr::from_be_bytes_mod_order(&hash)
+    (0..alphas.len())
+        .map(|i| {
+            let mut h = Sha256::new();
+            h.update(DST_DLEQ_BATCH);
+            h.update(&seed);
+            h.update((i as u64).to_le_bytes());
+            Fr::from_be_bytes_mod_order(&h.finalize())
         })
         .collect()
 }

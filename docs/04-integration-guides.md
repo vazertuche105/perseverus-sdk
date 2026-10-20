@@ -86,7 +86,7 @@ viewModelScope.launch {
 Typical durations over Tor:
 - `connect`, `tokenBalance`, `purchaseStatus`: about 1 s.
 - `redeem`: 1–3 s for a 100-token pack, longer for a yearly plan (1,300 tokens).
-- `analyzeInputs`: a few seconds. Filter download dominates, plus 0.5–1.5 s of proving per matched funding transaction.
+- `analyzeInputs`: 3–20 s in our tests against production. Most of it is Tor: building the call's two fresh circuits and downloading the filters (about 50 KB for one coin with 8 decoys). Proving adds 0.5–1.5 s per matched funding transaction. Run it while the user reviews the transaction, not after they tap Send.
 
 Calls can't be cancelled mid-flight. If the user leaves the screen, let the call finish in the background and ignore the result. Don't abandon a `redeem`.
 

@@ -104,11 +104,6 @@ struct OprfResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct BuildFilterRequest {
-    max_txs: Option<usize>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct BuildFilterInfo {
     pub height: u32,
     pub num_entries: u32,

@@ -41,7 +41,7 @@ Pay a 1-token trial over Lightning:
 
 While you're integrating, if the server you're testing against sells the dev plan, `buy-dev` gets a whole 100-token pack for a few cents instead.
 
-The sample prints a BOLT11 invoice. Pay it from any Lightning wallet. The sample polls until the invoice is paid, then redeems it:
+The sample shows the invoice as a QR code in the terminal: scan it with any Lightning wallet on your phone and pay. It also saves the QR as `invoice.png` in the data directory and prints the invoice text, for wallets on the same computer. The sample polls until the invoice is paid, then redeems it:
 
 ```
 Redeemed: pack 559256596868823998 with 1 token(s), 202610–202611

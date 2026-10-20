@@ -19,6 +19,8 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.17.0")
     // Only for reading Sparrow's config in `import-sparrow`.
     implementation("com.google.code.gson:gson:2.11.0")
+    // Only for showing Lightning invoices as a QR code in `buy-trial` / `buy-dev`.
+    implementation("com.google.zxing:core:3.5.3")
 }
 
 val repoRoot: File = rootDir.resolve("../../..").canonicalFile

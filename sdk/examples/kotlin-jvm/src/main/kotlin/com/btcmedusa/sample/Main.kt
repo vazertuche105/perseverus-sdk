@@ -34,6 +34,12 @@ import com.btcmedusa.perseverus.PurchaseState
 import com.btcmedusa.perseverus.ReportStatus
 import com.btcmedusa.perseverus.Transport
 import com.google.gson.JsonParser
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -48,7 +54,7 @@ private const val BUNDLED_PK = "../../../assets/circuit-v10/pk.bin"
 
 fun main(args: Array<String>) {
     val endpoint = System.getenv("MEDUSA_ENDPOINT") ?: DEFAULT_ENDPOINT
-    val dataDir = System.getenv("MEDUSA_DATA_DIR") ?: File(System.getProperty("user.home"), ".perseverus-sample").path
+    val dataDir = sampleDataDir().path
     val torSocks = System.getenv("MEDUSA_TOR_SOCKS") ?: DEFAULT_TOR_SOCKS
     // The SDK only allows a direct connection to a server on this machine.
     val transport = if (isLocalhost(endpoint)) Transport.Direct else Transport.Tor(socksProxy = torSocks)
@@ -166,7 +172,14 @@ private fun importSparrow(medusa: Perseverus, path: String?) {
 
 private fun buy(medusa: Perseverus, plan: Plan) {
     val p = medusa.buyTokens(PayMethod.LIGHTNING, plan)
-    println("Pay this Lightning invoice (${p.amountSat} sats) for ${p.tokens} token(s):\n\n${p.paymentRequest}\n")
+    println("Pay this Lightning invoice (${p.amountSat} sats) for ${p.tokens} token(s). Scan it with your phone's wallet:\n")
+    // Uppercase "LIGHTNING:<invoice>" is the usual QR form: wallets accept it,
+    // and an all-uppercase string makes a smaller, easier-to-scan code.
+    val qrText = "LIGHTNING:${p.paymentRequest}".uppercase()
+    printQr(qrText)
+    val png = File(sampleDataDir(), "invoice.png")
+    runCatching { writeQrPng(qrText, png) }.onSuccess { println("\nSame QR as an image: ${png.path}") }
+    println("\nOr copy the invoice:\n${p.paymentRequest}\n")
     println("Waiting for payment… (Ctrl-C to stop; the purchase is saved and can be redeemed later)")
     while (true) {
         when (medusa.purchaseStatus(p.purchaseId)) {
@@ -232,4 +245,50 @@ private fun printReport(r: PrivacyReport) {
         ReportStatus.ERROR -> println("$head  error ${r.error?.code}: ${r.error?.message}")
     }
     println()
+}
+
+private fun sampleDataDir(): File =
+    File(System.getenv("MEDUSA_DATA_DIR") ?: File(System.getProperty("user.home"), ".perseverus-sample").path)
+
+// ─── QR code for Lightning invoices ──────────────────────────────────────
+
+private fun qrMatrix(text: String) = QRCodeWriter().encode(
+    text, BarcodeFormat.QR_CODE, 0, 0, // 0 x 0 = one cell per QR module
+    mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L, EncodeHintType.MARGIN to 4),
+)
+
+/** Prints a QR code with half-block characters: two QR rows per text line,
+ *  black on white whatever the terminal's colours, so phones can scan it. */
+private fun printQr(text: String) {
+    val m = qrMatrix(text)
+    val out = StringBuilder()
+    for (y in 0 until m.height step 2) {
+        out.append("  \u001b[30;107m") // black on bright white
+        for (x in 0 until m.width) {
+            val top = m.get(x, y)
+            val bottom = y + 1 < m.height && m.get(x, y + 1)
+            out.append(
+                when {
+                    top && bottom -> '\u2588' // █
+                    top -> '\u2580'           // ▀
+                    bottom -> '\u2584'        // ▄
+                    else -> ' '
+                },
+            )
+        }
+        out.append("\u001b[0m\n")
+    }
+    print(out)
+}
+
+/** Writes the same QR as a PNG (8 px per module), for terminals that can't draw it. */
+private fun writeQrPng(text: String, file: File) {
+    val m = qrMatrix(text)
+    val scale = 8
+    val img = BufferedImage(m.width * scale, m.height * scale, BufferedImage.TYPE_INT_RGB)
+    for (y in 0 until img.height) for (x in 0 until img.width) {
+        img.setRGB(x, y, if (m.get(x / scale, y / scale)) 0x000000 else 0xFFFFFF)
+    }
+    file.parentFile?.mkdirs()
+    ImageIO.write(img, "png", file)
 }

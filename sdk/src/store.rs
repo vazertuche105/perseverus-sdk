@@ -58,6 +58,11 @@ struct StoreFile {
     /// lookups let the server intersect decoy sets).
     #[serde(default)]
     grades: std::collections::BTreeMap<String, u32>,
+    /// Card packs whose board entry hasn't been published yet, with the
+    /// one-time ticket the server issued for it (pack_id → ticket). Retried
+    /// on the next redemption.
+    #[serde(default)]
+    unpublished_board: std::collections::BTreeMap<u64, String>,
 }
 
 /// Cache key for a funding transaction: internal-order txid hex and height.
@@ -290,6 +295,36 @@ impl Store {
             f.grades.clear();
             Ok(())
         })
+    }
+
+    pub fn save_unpublished_board(&self, pack_id: u64, ticket: &str) -> Result<(), PerseverusError> {
+        self.update(|f| {
+            f.unpublished_board.insert(pack_id, ticket.to_string());
+            Ok(())
+        })
+    }
+
+    pub fn forget_unpublished_board(&self, pack_id: u64) -> Result<(), PerseverusError> {
+        self.update(|f| {
+            f.unpublished_board.remove(&pack_id);
+            Ok(())
+        })
+    }
+
+    /// Card packs still waiting for their board entry, with their tickets.
+    pub fn unpublished_board(&self) -> Result<Vec<(IssuedPack, String)>, PerseverusError> {
+        let _g = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        let f = self.read()?;
+        let mut out = Vec::new();
+        for (pack_id, ticket) in &f.unpublished_board {
+            if let Some(sp) = f.packs.iter().find(|p| p.pack_id == *pack_id) {
+                let blob = hex::decode(&sp.blob_hex)
+                    .map_err(|e| PerseverusError::Storage { reason: format!("pack blob hex: {e}") })?;
+                let pack = deserialize_issued_pack(&blob).map_err(|m| PerseverusError::Storage { reason: m })?;
+                out.push((pack, ticket.clone()));
+            }
+        }
+        Ok(out)
     }
 
     pub fn pending_purchases(&self) -> Result<Vec<StoredPurchase>, PerseverusError> {

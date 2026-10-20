@@ -410,9 +410,15 @@ impl IssuanceClient {
         result
     }
 
-    /// Whether this client holds an unused board ticket for `pack_id`.
-    pub fn has_board_ticket(&self, pack_id: u64) -> bool {
-        self.board_tickets.lock().unwrap().contains_key(&pack_id)
+    /// The unused board ticket this client holds for `pack_id`, if any.
+    /// Wallets that keep packs across sessions can store it and hand it back
+    /// with [`set_board_ticket`](Self::set_board_ticket) to retry a publish.
+    pub fn board_ticket(&self, pack_id: u64) -> Option<String> {
+        self.board_tickets.lock().unwrap().get(&pack_id).cloned()
+    }
+
+    pub fn set_board_ticket(&self, pack_id: u64, ticket: String) {
+        self.board_tickets.lock().unwrap().insert(pack_id, ticket);
     }
 
     fn remember_ticket(&self, pack_id: u64, ticket: &Option<String>) {

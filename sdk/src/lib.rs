@@ -363,13 +363,12 @@ impl Perseverus {
 
         // Card packs publish an attribution entry (chargeback handling), each
         // over its own isolated circuit, as Sparrow does. A failure here
-        // doesn't affect the tokens.
+        // doesn't affect the tokens: the pack's one-time board ticket is kept
+        // and the publish is retried on the next redemption.
+        self.retry_unpublished_board(&issuance);
         if p.method == "card" {
             for pack in &issued {
-                let tag = poseidon_hash_many(&poseidon_config(), &[PoseidonField::from(pack.pack_id)]);
-                if let Err(e) = issuance.publish_board_entry(pack, tag) {
-                    perseverus_client_native::debug_log!("[perseverus] board publish failed (tokens unaffected): {e}");
-                }
+                self.publish_or_keep(&issuance, pack);
             }
         }
         let month_now = month;
@@ -422,6 +421,37 @@ impl Perseverus {
 }
 
 impl Perseverus {
+    fn publish_or_keep(&self, issuance: &IssuanceClient, pack: &perseverus_core::issuance::IssuedPack) {
+        let tag = poseidon_hash_many(&poseidon_config(), &[PoseidonField::from(pack.pack_id)]);
+        if let Err(e) = issuance.publish_board_entry(pack, tag) {
+            perseverus_client_native::debug_log!("[perseverus] board publish failed (tokens unaffected, will retry): {e}");
+            if let Some(t) = issuance.board_ticket(pack.pack_id) {
+                let _ = self.store.save_unpublished_board(pack.pack_id, &t);
+            }
+        }
+    }
+
+    /// Retry board publishes that failed earlier. Entries already on the
+    /// board succeed as a no-op; a refused ticket (expired or used) is dropped.
+    fn retry_unpublished_board(&self, issuance: &IssuanceClient) {
+        let Ok(waiting) = self.store.unpublished_board() else { return };
+        for (pack, ticket) in waiting {
+            issuance.set_board_ticket(pack.pack_id, ticket);
+            let tag = poseidon_hash_many(&poseidon_config(), &[PoseidonField::from(pack.pack_id)]);
+            match issuance.publish_board_entry(&pack, tag) {
+                Ok(_) => {
+                    let _ = self.store.forget_unpublished_board(pack.pack_id);
+                }
+                Err(perseverus_client_native::issuance_client::IssuanceClientError::ServerStatus { status, .. })
+                    if (400..500).contains(&status) =>
+                {
+                    let _ = self.store.forget_unpublished_board(pack.pack_id);
+                }
+                Err(_) => {} // network: keep for next time
+            }
+        }
+    }
+
     fn pending(&self, purchase_id: &str) -> Result<StoredPurchase, PerseverusError> {
         self.store
             .pending_purchases()?

@@ -215,7 +215,7 @@ fun redeem(purchaseId: String): List<PackInfo>
 
 It returns one `PackInfo` per pack: 13 for `YEARLY`, otherwise 1.
 
-**Why it's built this way.** This one request is the only point where a payment touches the tokens, and the server never sees the unblinded tokens. Later spends can't be linked back to this purchase (see the [privacy model](07-privacy-model.md) for what can be linked).
+**Why it's built this way.** This one request is the only point where a payment touches the tokens. From v11, later spends can't be linked back to this purchase; in the current release they can (see the [privacy model](07-privacy-model.md#known-limitations)).
 
 **Safety.** The request carries a random `Idempotency-Key`. If the connection drops without a response, the SDK resends the identical request up to 4 times, and the server replays its stored answer instead of refusing a "used" purchase. The packs are written to disk before the call returns, and before anything else can fail.
 
@@ -235,7 +235,7 @@ toast("Added ${packs.sumOf { it.size.toInt() }} checks")
 - `Network`: Tor or server unreachable after retries. The purchase stays pending; try again later.
 - `Verification`: the server's signatures didn't verify against its public key. Treat the server as faulty and don't retry blindly.
 
-**What the server sees.** A paid credential and blinded points that it can't connect to any later spend.
+**What the server sees.** A paid credential and the pack's token points. From v11 it can't connect them to any later spend; in the current release it can.
 
 ---
 
@@ -320,7 +320,7 @@ val worst = result.reports.filter { it.status == ReportStatus.GRADED }.minByOrNu
 | `decrypt_failed` | The decrypted value isn't in the codebook. Report it to Perseverus. | Spent |
 | `unsupported_filter_version` | The server sent a filter format this SDK doesn't know. Update the SDK. | Free |
 
-**What the server sees.** A shuffled set of block heights on one circuit, and later, on another circuit, *k* blinded points with anonymous token proofs. Never a txid, an outpoint, an address or a balance.
+**What the server sees.** A shuffled set of block heights on one circuit, and later, on another circuit, *k* blinded points with token proofs. Never a txid, an outpoint, an address or a balance.
 
 ---
 

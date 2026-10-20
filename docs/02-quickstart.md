@@ -75,7 +75,7 @@ What happened:
 3. It spent one token with a zero-knowledge proof over a second Tor circuit. That request contained no heights or txids.
 4. It decrypted the tag and turned it into findings using the catalog.
 
-The server saw nine block heights, and separately one anonymous token spend. Nothing more.
+The server saw nine block heights, and separately one token spend. It never saw which coin was checked. (In the current release it can tell which purchase the token came from; that's fixed in v11, see the [privacy model](07-privacy-model.md#known-limitations).)
 
 ## The same thing in code
 

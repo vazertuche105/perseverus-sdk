@@ -308,7 +308,7 @@ Each key is `Poseidon(pack_id)` as a compressed field element. To use it, rebuil
 ```
 
 - `blinded_point` is the funding txid hashed to the curve and multiplied by a secret random factor, so the server can't recover the txid.
-- `spend` is a Groth16 proof (public inputs: `nullifier`, `current_month`, `revocation_root`). It proves that the client holds an unspent, unexpired, unrevoked token signed by this server, without revealing which one.
+- `spend` is a Groth16 proof (public inputs: `nullifier`, `current_month`, `revocation_root`). It proves that the client holds an unspent, unrevoked token signed by this server, without revealing which one. The server requires `current_month` to equal its own month; from v11 the token's validity window is also signed and checked inside the proof.
 - The request contains **no heights, txids or outpoints**, and must go over a different Tor circuit from `filters/batch`.
 
 **`200` response** (illustrative). There is one entry per request, in order, and each succeeds or fails independently:

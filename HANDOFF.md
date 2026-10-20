@@ -8,7 +8,7 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 
 1. The server publishes one encrypted filter per block. Each transaction's findings are compressed to a 24-bit **v3-lean tag**, encrypted under a key that only an **OPRF** evaluation (Baby Jubjub over BN254) can recover.
 2. The wallet downloads filters for its real blocks mixed with **Laplace decoys**, and matches its transaction locally.
-3. To decrypt a match, the wallet spends one **anonymous token**. Tokens are blind-signed in packs, so a purchase can't be linked to a query, and each one is spent with a **Groth16 proof** carrying a nullifier, so a query reveals nothing about which token or purchase paid for it (spends from one pack are currently linkable to each other; see `docs/07-privacy-model.md`).
+3. To decrypt a match, the wallet spends one **token**, with a **Groth16 proof** carrying a nullifier. The design goal is that a spend reveals nothing about which token or purchase paid for it. **In the current release the server can link a spend to its purchase** (never to the coin checked); the v11 circuit fixes this. See `docs/07-privacy-model.md`, Known limitations and Upcoming: v11.
 
 **Goal:** an SDK that BlueWallet's privacy wallet **Blueberry** ([Kotlin Multiplatform](https://github.com/BlueWallet/Blueberry.kmp)) can call to check a transaction's inputs before broadcast. Tokens are spent per funding transaction.
 

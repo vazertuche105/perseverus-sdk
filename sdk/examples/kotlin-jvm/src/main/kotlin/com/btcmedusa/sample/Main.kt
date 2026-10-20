@@ -4,6 +4,7 @@
 //   ./gradlew run --args="status"
 //   ./gradlew run --args="import-sparrow"                      (test with your Sparrow tokens)
 //   ./gradlew run --args="buy-trial"                           (pays a real ~$0.25 Lightning invoice)
+//   ./gradlew run --args="buy-dev"                             (100 tokens for a few cents; test servers only)
 //   ./gradlew run --args="analyze <txid>:<vout>:<height> ..."  (pre-broadcast analysis)
 //
 // Everything goes through Tor by default, so it's safe to try with a wallet
@@ -61,7 +62,8 @@ fun main(args: Array<String>) {
         when (args.firstOrNull() ?: "status") {
             "status" -> status(medusa, endpoint, dataDir)
             "import-sparrow" -> importSparrow(medusa, args.getOrNull(1))
-            "buy-trial" -> buyTrial(medusa)
+            "buy-trial" -> buy(medusa, Plan.TRIAL)
+            "buy-dev" -> buy(medusa, Plan.DEV)
             "analyze" -> analyze(medusa, args.drop(1))
             else -> usage()
         }
@@ -82,6 +84,7 @@ private fun usage() {
           status
           import-sparrow [path-to-sparrow-config]
           buy-trial
+          buy-dev        (100 tokens for a few cents; only on test servers)
           analyze <txid>:<vout>:<height> [...] [--decoys N] [--tip HEIGHT]
 
         Connects over Tor (start it first). --decoys is at least 4; 8 by default.
@@ -161,8 +164,8 @@ private fun importSparrow(medusa: Perseverus, path: String?) {
     println("$imported pack(s) imported; balance is now ${medusa.tokenBalance()}")
 }
 
-private fun buyTrial(medusa: Perseverus) {
-    val p = medusa.buyTokens(PayMethod.LIGHTNING, Plan.TRIAL)
+private fun buy(medusa: Perseverus, plan: Plan) {
+    val p = medusa.buyTokens(PayMethod.LIGHTNING, plan)
     println("Pay this Lightning invoice (${p.amountSat} sats) for ${p.tokens} token(s):\n\n${p.paymentRequest}\n")
     println("Waiting for payment… (Ctrl-C to stop; the purchase is saved and can be redeemed later)")
     while (true) {

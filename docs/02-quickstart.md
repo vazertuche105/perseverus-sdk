@@ -39,6 +39,8 @@ Pay a 1-token trial over Lightning:
 ./gradlew run --args="buy-trial"
 ```
 
+While you're integrating, if the server you're testing against sells the dev plan, `buy-dev` gets a whole 100-token pack for a few cents instead.
+
 The sample prints a BOLT11 invoice. Pay it from any Lightning wallet. The sample polls until the invoice is paid, then redeems it:
 
 ```

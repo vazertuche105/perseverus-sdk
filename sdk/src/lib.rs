@@ -110,6 +110,10 @@ pub enum Plan {
     Monthly,
     /// Card, paid once: 13 monthly packs (the rest of this month plus the next 12).
     Yearly,
+    /// Lightning, for integration testing: one 100-token pack at a token
+    /// price. Only test servers sell it; elsewhere `buyTokens` fails with
+    /// `Server` 403 `plan_unavailable`.
+    Dev,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -578,6 +582,7 @@ fn plan_str(p: Plan) -> &'static str {
         Plan::Onetime => "onetime",
         Plan::Monthly => "monthly",
         Plan::Yearly => "yearly",
+        Plan::Dev => "dev",
     }
 }
 

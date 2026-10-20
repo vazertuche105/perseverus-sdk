@@ -14,6 +14,7 @@ The first run builds the Rust library in release mode, generates the Kotlin bind
 | `status` | Server key, epoch month, token balance and packs |
 | `import-sparrow` | Copies the Medusa wallet's token packs, from `~/.sparrow/perseverus-config`, so you can try analysis without paying. Tokens you spend here are invisible to Sparrow; if Sparrow later picks one, the server rejects it as already spent. |
 | `buy-trial` | Shows a real Lightning invoice (about $0.25, 1 token), waits for payment, then claims the token |
+| `buy-dev` | Same, for a 100-token pack at a few cents. Only test servers sell this plan |
 | `analyze <txid>:<vout>:<height> …` | Pre-broadcast analysis. Options: `--decoys N` (default 8, minimum 4) and `--tip HEIGHT` (by default it asks mempool.space's onion over Tor) |
 
 The `txid` is the funding transaction in normal explorer order, and `height` is the block it confirmed in. Sparrow's UTXOs tab shows both.

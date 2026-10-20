@@ -33,6 +33,7 @@ Branch on `code`. `message` is for logs and may change. `retryable: true` means 
 | `batch_too_large` | 400 | More than the limit in `/v1/meta` `limits` (200 heights, 64 spends, 13 packs). | no |
 | `payment_required` | 402 | The purchase isn't paid yet. | no (poll status, then retry) |
 | `underpaid` | 402 | The Lightning amount is below the plan's price. | no |
+| `plan_unavailable` | 403 | The `dev` plan was asked for on a server that doesn't sell it. | no |
 | `credential_invalid` | 403 | The redemption credential isn't valid. | no |
 | `credential_expired` | 403 | The redemption credential has expired. | no |
 | `proof_invalid` | 403 | The spend proof didn't verify (analyze). | no |
@@ -111,6 +112,7 @@ Production response (2026-10-15):
 | `circuit.pk_sha256` | `null` because production doesn't serve the proving key; apps ship `pk.bin`. |
 | `filters.covered_ranges` | Block heights that have filters. Heights outside these are *not covered*. |
 | `payment_methods` | Which of `lightning`, `card` and `btc` are enabled right now. |
+| `dev_plan` | Only on servers that sell the testing plan: `{ "usd": 0.10, "tokens": 100 }`. Absent in production. |
 
 ## `POST /v1/tokens/purchase`
 
@@ -120,7 +122,7 @@ Production response (2026-10-15):
 { "method": "lightning", "plan": "onetime" }
 ```
 
-`method`: `lightning` | `card` | `btc`. `plan`: `trial` (Lightning, 1 token), `onetime` (100), `monthly` (card), `yearly` (card, 13 packs). Card requests may add `success_url` and `cancel_url`.
+`method`: `lightning` | `card` | `btc`. `plan`: `trial` (Lightning, 1 token), `onetime` (100), `monthly` (card), `yearly` (card, 13 packs), `dev` (Lightning, 100 tokens at a token price; test servers only, see `dev_plan` in `/v1/meta`). Card requests may add `success_url` and `cancel_url`.
 
 **`201` response** (illustrative values):
 
@@ -144,6 +146,7 @@ Recorded errors:
 { "error": { "code": "bad_request", "message": "plan \"trial\" is not available by card; use onetime, monthly or yearly", "retryable": false } }
 { "error": { "code": "bad_request", "message": "monthly and yearly plans are card-only; use plan \"onetime\" or \"trial\"", "retryable": false } }
 { "error": { "code": "bad_request", "message": "unknown method \"paypal\"; use lightning or card", "retryable": false } }
+{ "error": { "code": "plan_unavailable", "message": "the dev plan is only sold by test servers; use plan \"trial\" or \"onetime\"", "retryable": false } }
 { "error": { "code": "not_configured", "message": "Stripe not configured", "retryable": false } }
 { "error": { "code": "not_implemented", "message": "on-chain (silent payment) purchases are issued by the separate payment scanner; redeem its psbtc1 code with POST /v1/tokens/redeem {\"btc_code\": ...}", "retryable": false } }
 ```

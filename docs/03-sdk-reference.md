@@ -139,6 +139,7 @@ fun buyTokens(method: PayMethod, plan: Plan): Purchase
 | `CARD` | `ONETIME` | 1 pack of 100 tokens |
 | `CARD` | `MONTHLY` | Subscription: 1 pack of 100 per month |
 | `CARD` | `YEARLY` | Paid once: 13 packs of 100 (the rest of this month plus the next 12 months) |
+| `LIGHTNING` | `DEV` | 1 pack of 100 tokens at a token price (e.g. $0.10), for testing your integration. Only servers with the dev plan switched on sell it (`GET /v1/meta` shows `dev_plan`); production refuses it with `Server` 403 `plan_unavailable`. Don't ship a build that offers it to users. |
 
 A single pack is valid for the month it's redeemed and the following month.
 

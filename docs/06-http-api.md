@@ -38,6 +38,7 @@ Branch on `code`. `message` is for logs and may change. `retryable: true` means 
 | `credential_expired` | 403 | The redemption credential has expired. | no |
 | `proof_invalid` | 403 | The spend proof didn't verify (analyze). | no |
 | `revocation_root_mismatch` | 403 | The proof used an old revocation root; refetch it and re-prove. | no |
+| `ticket_invalid` | 403 | Board publish without a valid one-time ticket from the card redemption. | no |
 | `forbidden` | 403 | Other refusal. | no |
 | `not_found` | 404 | Unknown route, purchase (or card purchase already redeemed), codebook or key. | no |
 | `nullifier_spent` | 409 | This token was already spent (analyze). | no |
@@ -100,6 +101,12 @@ Production response (2026-10-15):
               "max_tokens_per_pack": 1024, "max_packs_per_redeem": 13 },
   "payment_methods": [ "…" ]
 }
+```
+
+Test servers that sell the [`dev` plan](#post-v1tokenspurchase) also include:
+
+```json
+  "dev_plan": { "usd": 0.10, "tokens": 100 }
 ```
 
 | Field | Use |
@@ -200,6 +207,7 @@ Send exactly one of `purchase_id` or `btc_code` (a `psbtc1…` code from the sil
 - `betas[i]` is `alphas[i]` multiplied by the server key.
 - `proof_challenge` and `proof_response` form a batched DLEQ proof that the same, published key was used for every token. The client **must** verify it.
 - `poseidon_proofs` are per-token proofs used later inside the spend circuit.
+- `board_ticket` (card packs only): a one-time ticket for this pack's [`POST /v1/board/publish`](#post-v1boardpublish). Lightning and on-chain packs don't get one and don't publish.
 
 Recorded errors:
 
@@ -224,10 +232,13 @@ Recorded errors:
 **Why:** card packs only. It publishes an attribution entry so the pack can be revoked after a chargeback. Send it over a Tor circuit isolated from the redeem call.
 
 ```json
-{ "pack_id": 12873466129870023, "tag_hex": "1f0c…(64 hex)", "expiration_month": 202611 }
+{ "pack_id": 12873466129870023, "tag_hex": "1f0c…(64 hex)", "expiration_month": 202611,
+  "ticket": "9b41…(64 hex)" }
 ```
 
-The response is `{ "board_size": 42, "board_root_hex": "…" }`. Errors: `409 slot_taken`, `400 bad_request`.
+`ticket` is the pack's `board_ticket` from the redeem response. A new entry needs one; each ticket works once and lasts 30 days. Without tickets anyone could fill the board's 65,536 slots and block every future purchase. Republishing an entry that's already on the board (same `pack_id`, tag and month) succeeds without a ticket and changes nothing. The board is kept on disk, so there's no need to republish after a server restart.
+
+The response is `{ "board_size": 42, "board_root_hex": "…" }`. Errors: `403 ticket_invalid` (missing, made up, expired or already used), `409 slot_taken`, `400 bad_request`.
 
 ## `POST /v1/filters/batch`
 

@@ -20,6 +20,7 @@ Find the message you're seeing. In Kotlin, `e.message` prints as `reason=…` or
 | You see | Cause | Fix |
 |---|---|---|
 | `Server` 400 `bad_request: plan "trial" is not available by card…` | Invalid method/plan combination. | See the table in [`buyTokens`](03-sdk-reference.md#buytokens). |
+| `Server` 403 `plan_unavailable: the dev plan is only sold by test servers…` | `Plan.DEV` asked of a server that doesn't sell it (production never does). | Use `TRIAL` or `ONETIME`; keep `DEV` out of release builds. |
 | `Server` 503 `not_configured: …` | That payment method is turned off on the server. | Hide that option. `GET /v1/meta` → `payment_methods` lists what's enabled. |
 | `Server` 503 `upstream_unavailable: BTC price feed unavailable…` | The server couldn't price the Lightning invoice. | Retry in a minute. |
 | `Server` 402 `payment_required` on `redeem` | Not paid yet, or the card webhook hasn't arrived. | Keep polling `purchaseStatus` until `PAID`. |

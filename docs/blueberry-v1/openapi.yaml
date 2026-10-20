@@ -145,7 +145,10 @@ paths:
         `purchase_id`.
 
         * `lightning`: plans `trial` (1 token) or `onetime` (100). The server
-          prices the invoice at the live BTC/USD rate.
+          prices the invoice at the live BTC/USD rate. Test servers may also
+          sell `dev` (100 tokens at a token price, for integration testing;
+          see `dev_plan` in `/v1/meta`). Elsewhere `dev` gets
+          `403 plan_unavailable`.
         * `card` (Stripe): plans `onetime` or `monthly` (1 pack) and `yearly`
           (13 monthly packs). Open `payment.checkout_url` in a browser.
         * `btc` (silent payment) is issued by a separate payment scanner;
@@ -265,7 +268,13 @@ paths:
       tags: [board]
       operationId: publishBoardEntry
       summary: Publish a card pack's attribution entry (chargeback handling).
-      description: Card packs only. Send over a Tor circuit isolated from the redeem call.
+      description: |
+        Card packs only. Send over a Tor circuit isolated from the redeem call.
+        A new entry needs the one-time `board_ticket` returned with that pack
+        by `POST /v1/tokens/redeem`. Republishing an entry that is already on
+        the board succeeds without one and changes nothing.
+        Errors: `403 ticket_invalid` (missing, invalid, expired or already
+        used), `409 slot_taken`.
       requestBody:
         required: true
         content:
@@ -278,6 +287,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/BoardPublishResponse' }
         '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
 
@@ -454,6 +465,8 @@ components:
             - batch_too_large
             - payment_required
             - underpaid
+            - plan_unavailable
+            - ticket_invalid
             - credential_invalid
             - credential_expired
             - credential_used
@@ -525,6 +538,14 @@ components:
         payment_methods:
           type: array
           items: { type: string, enum: [lightning, card, btc] }
+        dev_plan:
+          description: Only on test servers that sell the Lightning `dev` plan. Absent in production.
+          type: object
+          required: [usd, tokens]
+          additionalProperties: false
+          properties:
+            usd: { type: number, example: 0.10 }
+            tokens: { type: integer, example: 100 }
 
     Codebook:
       type: object
@@ -542,9 +563,9 @@ components:
         method: { type: string, enum: [lightning, card, btc] }
         plan:
           type: string
-          enum: [trial, onetime, monthly, yearly]
+          enum: [trial, onetime, monthly, yearly, dev]
           default: onetime
-          description: trial (Lightning, 1 token), onetime (100), monthly (card), yearly (card, 13 packs).
+          description: trial (Lightning, 1 token), onetime (100), monthly (card), yearly (card, 13 packs), dev (Lightning, 100 tokens at a token price; test servers only).
         success_url: { type: string, format: uri, description: Card only. Where Stripe sends the user after paying. }
         cancel_url: { type: string, format: uri, description: Card only. }
 
@@ -645,6 +666,10 @@ components:
             minItems: 2
             maxItems: 2
             items: { $ref: '#/components/schemas/FieldHex' }
+        board_ticket:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Card packs only. One-time ticket for this pack's `POST /v1/board/publish`, valid 30 days.
 
     RedeemResponse:
       type: object
@@ -671,6 +696,9 @@ components:
         pack_id: { type: integer, format: uint64 }
         tag_hex: { $ref: '#/components/schemas/FieldHex' }
         expiration_month: { type: integer, example: 202611 }
+        ticket:
+          type: string
+          description: The `board_ticket` from the redeem response. Required for a new entry.
 
     BoardPublishResponse:
       type: object

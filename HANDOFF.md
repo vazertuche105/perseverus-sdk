@@ -7,7 +7,7 @@
 BTC Medusa tells a wallet how exposed its coins are to chain analysis, using findings from the open-source [am-i-exposed](https://github.com/Copexit/am-i-exposed) engine, **without the server learning which coins were asked about**.
 
 1. The server publishes one encrypted filter per block. Each transaction's findings are compressed to a 24-bit **v3-lean tag**, encrypted under a key that only an **OPRF** evaluation (Baby Jubjub over BN254) can recover.
-2. The wallet downloads filters for its real blocks mixed with **Laplace decoys**, and matches its transaction locally.
+2. The wallet downloads filters for its real blocks mixed with **decoys** (drawn uniformly from a window placed at a random offset around each real block), and matches its transaction locally.
 3. To decrypt a match, the wallet spends one **token**, with a **Groth16 proof** carrying a nullifier. The design goal is that a spend reveals nothing about which token or purchase paid for it. **In the current release the server can link a spend to its purchase** (never to the coin checked); the v11 circuit fixes this. See `docs/07-privacy-model.md`, Known limitations and Upcoming: v11.
 
 **Goal:** an SDK that BlueWallet's privacy wallet **Blueberry** ([Kotlin Multiplatform](https://github.com/BlueWallet/Blueberry.kmp)) can call to check a transaction's inputs before broadcast. Tokens are spent per funding transaction.
@@ -15,7 +15,10 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 ## Status
 
 **Done and tested**
-- `sdk/` API: `connect`, `buyTokens` (Lightning trial and onetime, card onetime, monthly and yearly), `addPurchase`, `purchaseStatus`, `redeem` (returns a list of packs), `tokenBalance`, `listPacks`, `importPack`, `analyzeInputs`. Kotlin bindings live in package `com.btcmedusa.perseverus`.
+- `sdk/` API: `connect`, `buyTokens` (Lightning trial and onetime, card onetime, monthly and yearly, plus Lightning `DEV` on test servers), `addPurchase`, `purchaseStatus`, `redeem` (returns a list of packs), `tokenBalance`, `listPacks`, `importPack`, `analyzeInputs`, `forgetCachedGrades`. Kotlin bindings live in package `com.btcmedusa.perseverus`; Swift bindings and an XCFramework come from `scripts/build-ios.sh`.
+- CI compiles and runs a Swift program against the real library (`scripts/swift-smoke.sh`) on every push.
+- Each coin's grade is cached on the device and never looked up twice (security review F11). `forgetCachedGrades()` clears the cache.
+- Card packs' board publishes carry the one-time `board_ticket` from the redeem response; a failed publish keeps the ticket with the pack and retries on the next `redeem` (2026-10-20).
 - Report text is generated from `docs/blueberry-v1/findings-catalog.v3lean.json`. It matches the reference wallet's renderer exactly; the parity test covers 500 tags.
 - The full analysis pipeline has been tested end to end against a real server: decoys, local match, ungraded and not-covered inputs, one token per funding transaction, batched spend, DLEQ verification, and already-spent tokens. That test needs the private server code, so it isn't in this repo.
 - `sdk/examples/kotlin-jvm` runs on macOS (Apple silicon, JDK 25, Gradle 9.1): `status` works and `import-sparrow` imports packs.
@@ -37,7 +40,9 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 2. ~~Server `/v1` API, then switch the SDK to `/v1`.~~ Done 2026-10-14. The server serves `/v1` (contract: `docs/blueberry-v1/openapi.yaml`) and the SDK uses only `/v1`. The card yearly plan (13 packs) is supported.
 3. ~~**Developer documentation**~~ Done 2026-10-15: `docs/README.md` onward (how it works, quickstart, SDK reference, integration guides, report field guide, HTTP `/v1` reference with recorded examples, privacy model, Android/iOS build scripts in `scripts/` run by CI, troubleshooting). Keep it in step with any API change.
 4. ~~**Privacy fix:** stop sending `pack_id` on the spend circuit.~~ Done 2026-10-15. The SDK downloads `GET /v1/revocation/list` and builds non-inclusion proofs on the device; revoked packs are detected locally (`PackInfo.revoked`). This also fixed the revocation tree in `core/src/smt.rs`, which walked the key bits in the opposite order to the circuit, so after the first revocation every spend proof failed.
-5. **SDK features:** BTC silent-payment purchase, a redeem retry that survives an app restart (persist the prepared blinded packs), a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
+5. ~~**Dev plan for integrators.**~~ Done 2026-10-20: `Plan.DEV`, 100 tokens over Lightning at a token price, sold only by servers that switch it on (`dev_plan` in `/v1/meta`).
+6. **v11 spend circuit and key rotation** (unlinkable spends). Implemented and tested on the `circuit-v11` branch; ships with a coordinated key rotation. See `docs/07-privacy-model.md`, Upcoming: v11.
+7. **SDK features:** BTC silent-payment purchase, a redeem retry that survives an app restart (persist the prepared blinded packs), a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
 
 **Open questions for BlueWallet:** inputs as a PSBT or as outpoints plus heights (the SDK takes outpoints plus heights today); decoy default and bandwidth budget; which block range must have filters; payment methods at launch; how the SDK is licensed and published.
 

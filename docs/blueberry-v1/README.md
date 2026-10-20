@@ -18,7 +18,7 @@ The local code has moved past what `PERSEVERUS_HANDOFF_AND_BLUEBERRY_INTEGRATION
 2. **The client scans the filter before spending a token.** An input whose txid isn't in a present filter is `ungraded` (skip rule). An input whose height is in `missing` is `not_covered`. Neither costs a token. The schema has a separate status for each.
 3. **No on-demand filter building.** `/filters/*` now serve pre-built filters only, and a miss returns 404 or lands in `missing`. Filter coverage for deep-history inputs (B.7) is therefore an M0 decision, not a latency tweak. `/v1/meta.filters.covered_ranges` exposes it.
 4. **Heights must not travel with spends.** B.5 sketched `/v1/analyze/batch` as "(filterHeight, decoys) + spend proofs". That would let the server join the decoy set to the spend batch. In this contract the analyze request carries no heights, and it must go over a different Tor circuit from the filter download.
-5. **Pack ids need `/board/slots`.** The wallet re-rolls any `pack_id` whose 16-bit revocation slot is taken, and publish returns 409 on a collision.
+5. **Pack ids need `/board/slots`.** The wallet re-rolls any `pack_id` whose 16-bit revocation slot is taken, and publish returns 409 on a collision. Since 2026-10-20 a new board entry also needs the one-time `board_ticket` that the redeem response returns with each card pack (`403 ticket_invalid` otherwise), and the board is kept on disk, so republishing after a restart isn't needed.
 6. **The yearly card plan is 13 packs**, through `POST /v1/tokens/redeem` (one request, 13 blinded packs).
 
 ## Open questions for Blueberry (from B.11, narrowed)

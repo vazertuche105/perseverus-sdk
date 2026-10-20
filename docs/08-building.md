@@ -66,6 +66,8 @@ build/ios/swift/perseverus_sdk.swift
 
 The Swift API mirrors the Kotlin one: `try Perseverus.connect(config:)`, `analyzeInputs(inputs:options:)`, and so on, with errors thrown as `PerseverusError`.
 
+`scripts/swift-smoke.sh` compiles a small Swift program against the generated bindings and the real library and runs it against a stand-in server: connect with a pinned key, the Tor and decoy refusals, balance, packs and purchases. CI runs it on every push; run it locally on a Mac to check a toolchain.
+
 To run on an Intel-Mac simulator, add the `x86_64-apple-ios` target to the script and combine the two simulator libraries with `lipo` before `-create-xcframework`.
 
 ## Kotlin Multiplatform (Blueberry)

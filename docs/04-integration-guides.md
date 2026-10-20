@@ -96,11 +96,11 @@ Calls can't be cancelled mid-flight. If the user leaves the screen, let the call
 
 Every purchase follows the same four steps: **buy → show payment → poll → redeem**.
 
-### Lightning (trial or 100-token pack)
+### Lightning (trial, 100-token pack, or dev)
 
 ```kotlin
 suspend fun buyWithLightning(plan: Plan): List<PackInfo> {
-    val p = medusa.io { it.buyTokens(PayMethod.LIGHTNING, plan) }   // TRIAL or ONETIME
+    val p = medusa.io { it.buyTokens(PayMethod.LIGHTNING, plan) }   // TRIAL, ONETIME (or DEV while testing)
     ui.showInvoice(qr = p.paymentRequest, amountSat = p.amountSat, expiresAt = p.expiresAt)
     // If Blueberry can pay Lightning itself, offer "Pay from this wallet" with p.paymentRequest.
 
@@ -266,6 +266,7 @@ Branch on the code (`e.reason.substringBefore(':')` for `Server`, `report.error.
 
 ## Testing
 
+- **A full pack for a few cents:** while you're integrating, a test server may sell the Lightning `DEV` plan: 100 tokens at a token price (e.g. $0.10). `GET /v1/meta` shows `dev_plan` when it's on, and the sample's `buy-dev` command buys one. Production doesn't sell it (`Server` 403 `plan_unavailable`), so never offer `DEV` to users in a release build.
 - **Against production with real money, cheaply:** a Lightning `TRIAL` is 1 token (about $0.25).
 - **Without Tor:** only against a server on your own machine (`Transport.Direct` with a `localhost` endpoint; see the server repository's local-server instructions). The SDK refuses `Transport.Direct` for any other server, production included, so testing with a real wallet can't expose your IP.
 - **Known coin:** `728da0f74813fec9c1381ec9e82ab7a096d1b637b845c446f3ac02db14ccb44f`, vout `0`, height `945270` returns grade **D** (peel chain) and raw tag `V3LEAN:b40014`.

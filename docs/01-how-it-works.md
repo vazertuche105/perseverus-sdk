@@ -73,6 +73,8 @@ sequenceDiagram
     Note over W: user pays
     W->>S: POST /v1/tokens/redeem {purchase_id, blinded tokens}  (own Tor circuit)
     S-->>W: blind signatures. Wallet unblinds and stores a pack of 100 tokens.
+    Note over W,S: Card packs only, for chargebacks
+    W->>S: POST /v1/board/publish {pack_id, tag, one-time ticket}  (own Tor circuit)
     Note over W,S: Each time the user is about to send
     W->>S: POST /v1/filters/batch {real + decoy heights, shuffled}  (circuit A)
     S-->>W: encrypted filters

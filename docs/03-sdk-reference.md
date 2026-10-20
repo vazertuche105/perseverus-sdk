@@ -161,6 +161,7 @@ showInvoiceQr(p.paymentRequest, "${p.amountSat} sats for ${p.tokens} checks")
 
 **Errors.** `Server` with reason:
 - `bad_request: …` for an invalid combination, e.g. `TRIAL` by card.
+- `plan_unavailable: …` (403) for `DEV` on a server that doesn't sell it.
 - `not_configured: …` when that payment method is turned off on the server.
 - `upstream_unavailable: …` when the price feed or payment processor is down (retryable).
 
@@ -220,7 +221,7 @@ It returns one `PackInfo` per pack: 13 for `YEARLY`, otherwise 1.
 
 **Safety.** The request carries a random `Idempotency-Key`. If the connection drops without a response, the SDK resends the identical request up to 4 times, and the server replays its stored answer instead of refusing a "used" purchase. The packs are written to disk before the call returns, and before anything else can fail.
 
-**Card packs** also publish one attribution entry each (`POST /v1/board/publish`, each over its own circuit). That lets a pack be revoked after a chargeback. If publishing fails the tokens are still fine, and the failure is only logged.
+**Card packs** also publish one attribution entry each (`POST /v1/board/publish`, each over its own circuit). That lets a pack be revoked after a chargeback. The server hands out a one-time ticket with each card pack, and the SDK sends it with the publish; you don't handle it. If publishing fails the tokens are still fine: the SDK keeps the ticket with the pack and retries on the next `redeem`. Lightning, dev and on-chain packs publish nothing.
 
 ```kotlin
 val packs = medusa.redeem(p.purchaseId)
@@ -331,7 +332,7 @@ val worst = result.reports.filter { it.status == ReportStatus.GRADED }.minByOrNu
 |---|---|---|
 | `Transport` | sealed class | `Tor(socksProxy: String?)`, `Direct` |
 | `PayMethod` | enum | `LIGHTNING`, `CARD` |
-| `Plan` | enum | `TRIAL`, `ONETIME`, `MONTHLY`, `YEARLY` |
+| `Plan` | enum | `TRIAL`, `ONETIME`, `MONTHLY`, `YEARLY`, `DEV` (test servers only) |
 | `PurchaseState` | enum | `PENDING`, `PAID`, `REDEEMED`, `EXPIRED` |
 | `ReportStatus` | enum | `GRADED`, `UNGRADED`, `NOT_COVERED`, `ERROR` |
 | `Severity` | enum | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`, `GOOD` |

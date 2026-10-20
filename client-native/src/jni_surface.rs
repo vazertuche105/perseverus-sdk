@@ -434,9 +434,11 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_issuanceIssuePac
             &perseverus_core::poseidon::poseidon_config(),
             &[PoseidonField::from(issued.pack_id)],
         );
-        client
-            .publish_board_entry(&issued, tag)
-            .map_err(|e| format!("publish_board_entry: {}", e))?;
+        // The pack is already signed and paid for. A failed board publish
+        // must not lose it; the wallet can republish later.
+        if let Err(e) = client.publish_board_entry(&issued, tag) {
+            crate::debug_log!("[issuance] board publish failed (tokens unaffected): {}", e);
+        }
         let bytes = serialize_issued_pack(&issued)?;
         vec_to_jbytes(env, &bytes)
     })
@@ -482,9 +484,11 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_issuanceRedeemPa
             &perseverus_core::poseidon::poseidon_config(),
             &[PoseidonField::from(issued.pack_id)],
         );
-        client
-            .publish_board_entry(&issued, tag)
-            .map_err(|e| format!("publish_board_entry: {}", e))?;
+        // The pack is already signed and paid for. A failed board publish
+        // must not lose it; the wallet can republish later.
+        if let Err(e) = client.publish_board_entry(&issued, tag) {
+            crate::debug_log!("[issuance] board publish failed (tokens unaffected): {}", e);
+        }
         let bytes = serialize_issued_pack(&issued)?;
         vec_to_jbytes(env, &bytes)
     })
@@ -638,8 +642,8 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_issuanceRedeemYe
 /// `IssuanceClient.republishBoardEntry(handle, issuedPackBytes): void`
 ///
 /// Re-publishes the attribution entry from a previously issued pack
-/// blob to the server's bulletin board. This is needed after a server
-/// restart wipes the in-memory board.
+/// blob to the server's bulletin board. The board is now kept on disk, so
+/// republishing an entry that's already there is a harmless no-op.
 ///
 /// Errors are surfaced as `PerseverusException`; the Java side can
 /// catch and discard packs whose entries can't be re-published.

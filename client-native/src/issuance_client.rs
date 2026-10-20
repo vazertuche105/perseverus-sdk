@@ -101,6 +101,9 @@ struct IssueResponseWire {
     proof_challenge: String,
     proof_response: String,
     poseidon_proofs: Vec<[String; 2]>,
+    /// One-time board ticket (card packs only; absent on older servers).
+    #[serde(default)]
+    board_ticket: Option<String>,
 }
 
 // Stripe redemption wire shape — kept in lockstep with the server's stripe.rs.
@@ -156,6 +159,8 @@ struct PublishCommitmentRequestWire {
     pack_id: u64,
     tag_hex: String,
     expiration_month: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ticket: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -179,6 +184,9 @@ pub struct IssuanceClient {
     server_pubkey: G1Projective,
     /// "" for the legacy routes (Sparrow), "/v1" for the versioned API.
     api_prefix: &'static str,
+    /// Board tickets from card redemptions, by pack_id, until the pack's
+    /// entry is published. Shared by clones of this client.
+    board_tickets: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<u64, String>>>,
 }
 
 /// Tries for `POST /v1/tokens/redeem` when the connection fails without a response.
@@ -212,6 +220,7 @@ impl IssuanceClient {
             poseidon: perseverus_core::poseidon::poseidon_config(),
             server_pubkey,
             api_prefix: "",
+            board_tickets: Default::default(),
         }
     }
 
@@ -383,11 +392,39 @@ impl IssuanceClient {
         let mut tag_buf = Vec::new();
         tag.serialize_compressed(&mut tag_buf)?;
 
+        // The ticket is single-use: take it now, and put it back if the
+        // publish doesn't go through so a retry can still use it.
+        let ticket = self.board_tickets.lock().unwrap().remove(&issued.pack_id);
         let wire = PublishCommitmentRequestWire {
             pack_id: issued.pack_id,
             tag_hex: hex::encode(&tag_buf),
             expiration_month: issued.expiration_month,
+            ticket: ticket.clone(),
         };
+        let result = self.send_board_publish(&wire);
+        if result.is_err() {
+            if let Some(t) = ticket {
+                self.board_tickets.lock().unwrap().insert(issued.pack_id, t);
+            }
+        }
+        result
+    }
+
+    /// Whether this client holds an unused board ticket for `pack_id`.
+    pub fn has_board_ticket(&self, pack_id: u64) -> bool {
+        self.board_tickets.lock().unwrap().contains_key(&pack_id)
+    }
+
+    fn remember_ticket(&self, pack_id: u64, ticket: &Option<String>) {
+        if let Some(t) = ticket {
+            self.board_tickets.lock().unwrap().insert(pack_id, t.clone());
+        }
+    }
+
+    fn send_board_publish(
+        &self,
+        wire: &PublishCommitmentRequestWire,
+    ) -> Result<PublishResult, IssuanceClientError> {
         let url = format!("{}{}/board/publish", self.base_url, self.api_prefix);
 
         // Build an isolated client — a different Tor circuit than issue_pack,
@@ -413,10 +450,10 @@ impl IssuanceClient {
         // local Tor SOCKS port rejects stream-isolation auth), fall back to the
         // main client — for a .onion there is no exit node, so the fresh-circuit
         // isolation matters far less than the publish actually succeeding.
-        let resp = match isolated_http.post(&url).json(&wire).send() {
+        let resp = match isolated_http.post(&url).json(wire).send() {
             Ok(r) => r,
             Err(_) if !is_loopback => {
-                self.http.post(&url).json(&wire).send()?
+                self.http.post(&url).json(wire).send()?
             }
             Err(e) => return Err(e.into()),
         };
@@ -739,6 +776,7 @@ impl IssuanceClient {
         }
         let mut out = Vec::with_capacity(resp_wire.packs.len());
         for (pi, w) in resp_wire.packs.iter().enumerate() {
+            self.remember_ticket(prepared[pi].1.pack_id, &w.board_ticket);
             let expected = prepared[pi].0.alphas.len();
             if w.betas.len() != expected {
                 return Err(IssuanceClientError::Crypto(
@@ -805,6 +843,7 @@ impl IssuanceClient {
         }
 
         let wire: IssueResponseWire = http_resp.json()?;
+        self.remember_ticket(secrets.pack_id, &wire.board_ticket);
 
         if wire.betas.len() != request.alphas.len() {
             return Err(IssuanceClientError::Crypto(
@@ -896,6 +935,7 @@ impl IssuanceClient {
 
         // Response is the same shape as IssueResponseWire.
         let wire: IssueResponseWire = http_resp.json()?;
+        self.remember_ticket(secrets.pack_id, &wire.board_ticket);
 
         if wire.betas.len() != request.alphas.len() {
             return Err(IssuanceClientError::Crypto(
@@ -976,6 +1016,7 @@ impl IssuanceClient {
         }
 
         let wire: IssueResponseWire = http_resp.json()?;
+        self.remember_ticket(secrets.pack_id, &wire.board_ticket);
         if wire.betas.len() != request.alphas.len() {
             return Err(IssuanceClientError::Crypto(
                 PerseverusError::BatchedDleqVerificationFailed,
@@ -1052,6 +1093,7 @@ impl IssuanceClient {
         }
 
         let wire: IssueResponseWire = http_resp.json()?;
+        self.remember_ticket(secrets.pack_id, &wire.board_ticket);
         if wire.betas.len() != request.alphas.len() {
             return Err(IssuanceClientError::Crypto(
                 PerseverusError::BatchedDleqVerificationFailed,

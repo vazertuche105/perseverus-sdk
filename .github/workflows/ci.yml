@@ -32,6 +32,27 @@ jobs:
             generate --library "$LIB" --language kotlin --out-dir sdk/bindings/kotlin
           test -s sdk/bindings/kotlin/com/btcmedusa/perseverus/perseverus_sdk.kt
 
+  # The Kotlin/JVM sample integrators run first (docs/02-quickstart.md):
+  # builds the library, generates bindings and compiles the app.
+  kotlin-sample:
+    name: kotlin sample
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: '17' }
+      - name: Compile
+        shell: bash
+        run: |
+          set -o pipefail
+          cd sdk/examples/kotlin-jvm
+          ./gradlew --no-daemon -q compileKotlin 2>&1 | tee build.log || {
+            echo "::error title=sample compile failed::$(tail -n 40 build.log | awk '{gsub(/%/,"%25"); gsub(/\r/,""); printf "%s%%0A", $0}')"
+            exit 1
+          }
+
   # We don't publish mobile binaries; these jobs prove the integrator build
   # scripts in scripts/ (documented in docs/08-building.md) keep working.
   android:

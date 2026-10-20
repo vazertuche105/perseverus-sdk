@@ -70,3 +70,11 @@ jobs:
             echo "::error title=build failed::$(tail -n 40 build.log | awk '{gsub(/%/,"%25"); gsub(/\r/,""); printf "%s%%0A", $0}')"
             exit 1
           }
+      - name: Swift smoke test (calls the real library from Swift)
+        shell: bash
+        run: |
+          set -o pipefail
+          scripts/swift-smoke.sh 2>&1 | tee smoke.log || {
+            echo "::error title=swift smoke failed::$(tail -n 40 smoke.log | awk '{gsub(/%/,"%25"); gsub(/\r/,""); printf "%s%%0A", $0}')"
+            exit 1
+          }

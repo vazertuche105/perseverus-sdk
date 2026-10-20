@@ -218,7 +218,9 @@ val summary = when {
 
 ### Caching
 
-A coin's history doesn't change once its funding transaction is confirmed. **Cache graded reports by funding txid** in the wallet's own database, and skip those inputs next time. That saves tokens and network. Don't cache `ERROR` reports. `NOT_COVERED` can be retried later, because coverage grows (see `GET /v1/meta` → `filters.covered_ranges`).
+**The SDK does this for you.** A coin's history doesn't change once its funding transaction is confirmed, so the SDK keeps every graded result in `dataDir` and answers repeat checks of the same coin on the device: no request, no token (`tokenSpent = false` on those reports). This is also a privacy feature: checking the same coin again with new decoys would let the server narrow down which block is real, so don't add your own "re-check" that clears it.
+
+You can call `analyzeInputs` on every send without worrying about cost; only coins never graded before reach the server. `ERROR` reports aren't cached, so retrying works. `NOT_COVERED` isn't cached either and can be checked again later, because coverage grows (see `GET /v1/meta` → `filters.covered_ranges`). `forgetCachedGrades()` clears the cache; you shouldn't normally need it.
 
 ---
 
@@ -285,5 +287,5 @@ Branch on the code (`e.reason.substringBefore(':')` for `Server`, `report.error.
 - [ ] All SDK calls off the main thread.
 - [ ] `decoysPerInput` 8 (the SDK refuses fewer than 4).
 - [ ] No txid, outpoint or address sent to any Medusa endpoint by your own code, and not logged alongside Medusa activity.
-- [ ] Reports cached by funding txid; `UNGRADED` and `NOT_COVERED` shown as neutral.
+- [ ] No wallet-side "re-check" that calls `forgetCachedGrades()`; the SDK's cache answers repeat checks for free. `UNGRADED` and `NOT_COVERED` shown as neutral.
 - [ ] The broadcast is never blocked by the check.

@@ -13,7 +13,8 @@ The wallet SDK for BTC Medusa. It lets a wallet buy token packs and then find ou
 | `redeem(id)` → `List<PackInfo>` | Blinds tokens, gets them signed via `POST /v1/tokens/redeem` and unblinds them. One pack for most plans; a yearly card plan returns 13 (this month plus the next 12). The claim goes out on its own Tor circuit. |
 | `tokenBalance()` / `listPacks()` | Computed on the device; the server never learns balances. They fetch the current month (`GET /v1/meta`) to decide which packs are active. |
 | `importPack(blob, method)` | Adds a pack blob in Sparrow's format, e.g. migrated from Sparrow or restored from a backup. |
-| `analyzeInputs(inputs, AnalyzeOptions)` → `AnalysisResult` | The pre-broadcast call. Returns one `PrivacyReport` per input. |
+| `analyzeInputs(inputs, AnalyzeOptions)` → `AnalysisResult` | The pre-broadcast call. Returns one `PrivacyReport` per input. Coins already graded on this device are answered from the SDK's cache, free. |
+| `forgetCachedGrades()` | Clears that cache. Rarely needed; repeat lookups weaken decoys. |
 
 `PrivacyReport` follows `docs/blueberry-v1/privacy-report.schema.json`. Each report has a `status`:
 - `GRADED`: the funding transaction was found and decoded.

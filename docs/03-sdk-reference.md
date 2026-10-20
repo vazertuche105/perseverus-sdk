@@ -9,7 +9,7 @@ Contents:
 - Reading state: [`serverPubkey`](#serverpubkey), [`currentMonth`](#currentmonth), [`tokenBalance`](#tokenbalance), [`listPacks`](#listpacks)
 - Buying tokens: [`buyTokens`](#buytokens), [`addPurchase`](#addpurchase), [`pendingPurchases`](#pendingpurchases), [`purchaseStatus`](#purchasestatus), [`redeem`](#redeem)
 - [`importPack`](#importpack)
-- [`analyzeInputs`](#analyzeinputs)
+- [`analyzeInputs`](#analyzeinputs), [`forgetCachedGrades`](#forgetcachedgrades)
 - [Types](#types)
 - [Errors: `PerseverusException`](#errors-perseverusexception)
 
@@ -262,6 +262,7 @@ fun analyzeInputs(inputs: List<InputRef>, options: AnalyzeOptions): AnalysisResu
 **What.** The pre-broadcast privacy check. For each input of the transaction the user is about to sign, it returns a `PrivacyReport` describing how exposed the coin is, based on the transaction that created it.
 
 **How** (details in [How it works](01-how-it-works.md)):
+0. Coins already graded on this device are answered from the SDK's cache in `dataDir`: no request, no token, `tokenSpent = false`. Only the rest go on to the steps below.
 1. Inputs are grouped by funding transaction; one check covers all inputs from the same earlier transaction.
 2. Filters are downloaded for the real block heights mixed with `decoysPerInput` decoys each, shuffled, at most 200 per request, over one Tor circuit.
 3. Each funding transaction is matched **on the device**:
@@ -323,6 +324,17 @@ val worst = result.reports.filter { it.status == ReportStatus.GRADED }.minByOrNu
 | `unsupported_filter_version` | The server sent a filter format this SDK doesn't know. Update the SDK. | Free |
 
 **What the server sees.** A shuffled set of block heights on one circuit, and later, on another circuit, *k* blinded points with token proofs. Never a txid, an outpoint, an address or a balance.
+
+## `forgetCachedGrades`
+
+```kotlin
+@Throws(PerseverusException::class)
+fun forgetCachedGrades()
+```
+
+**What.** Clears the grades the SDK has cached on this device. The next `analyzeInputs` of those coins looks them up again and spends tokens.
+
+**Why you normally shouldn't.** Looking the same coin up twice, with fresh decoys each time, lets the server narrow down which block is real. The cache is what prevents that. Use this only for something like a "reset app data" screen.
 
 ---
 

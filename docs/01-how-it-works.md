@@ -23,7 +23,7 @@ For each block, the server publishes a **filter**: a compact list of that block'
 
 ## Piece 3: decoys hide which block you care about
 
-The wallet doesn't ask for just the block it cares about. It asks for that block **mixed with random decoy blocks**, shuffled, so the server sees a list of block heights such as `812345, 801992, 812301, …` and can't tell which is real. The decoys are drawn near the real height (a Laplace distribution), so they look plausible.
+The wallet doesn't ask for just the block it cares about. It asks for that block **mixed with random decoy blocks**, shuffled, so the server sees a list of block heights such as `812345, 801992, 812301, …` and can't tell which is real. The decoys are drawn from a window of nearby heights placed at a random offset, so the real block sits at a random position among them rather than in the middle.
 
 The wallet then matches its transaction **on the device**. Three things can happen:
 

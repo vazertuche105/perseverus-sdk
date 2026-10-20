@@ -305,7 +305,8 @@ fn filter_with_cover<R: Rng>(
 
 /// `block_height` plus up to `num_decoys` distinct Laplace decoys in `[1, tip]`.
 fn cover_set<R: Rng>(block_height: u32, num_decoys: usize, scale: f64, tip: u32, rng: &mut R) -> Vec<u32> {
-    perseverus_core::laplace::select_decoy_blocks(block_height, num_decoys, scale, 1, tip, rng)
+    let window = perseverus_core::laplace::window_for_scale(scale, num_decoys);
+    perseverus_core::laplace::cover_heights_for(&[block_height], num_decoys, window, tip, rng)
 }
 
 /// Inspect the version byte and route to the v3 or v5 implementation.

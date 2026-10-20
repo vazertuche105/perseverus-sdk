@@ -23,7 +23,7 @@ use perseverus_client_native::codebook::Codebook;
 use perseverus_client_native::{QueryClient, SpendClient};
 use perseverus_core::filter::{decrypt_code_v5, scan_filter_v5, BlockFilterV5, FILTER_FORMAT_VERSION_V5};
 use perseverus_core::issuance::IssuedPack;
-use perseverus_core::laplace::select_decoy_blocks;
+use perseverus_core::laplace::{cover_heights_for, window_for_scale};
 use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 
@@ -97,24 +97,15 @@ pub(crate) fn parse_txid_display(hex_str: &str) -> Result<[u8; 32], PerseverusEr
     Ok(out)
 }
 
-/// Pick `real ∪ decoys` heights, exactly `real × (1 + d)` unique heights when
-/// the chain allows it, mirroring Sparrow's `prefetchFiltersWithDecoys`.
+/// Pick `real ∪ decoys` heights: for each real height, `d` decoys drawn
+/// uniformly from a window placed at a random offset around it, so the real
+/// block is no more likely than any decoy (security review F11; the old
+/// centred Laplace draw let the server pick the real block ~1 time in 3).
+/// Shuffled before sending.
 pub(crate) fn heights_with_decoys(real: &HashSet<u32>, d: usize, tip: u32) -> Vec<u32> {
-    let mut all: HashSet<u32> = real.clone();
-    if d > 0 && !real.is_empty() {
-        let target = real.len() * (1 + d);
-        let reals: Vec<u32> = real.iter().copied().collect();
-        let mut rng = OsRng;
-        let mut i = 0usize;
-        while all.len() < target && i < target * 200 {
-            let h = reals[i % reals.len()];
-            for c in select_decoy_blocks(h, 1, DEFAULT_LAPLACE_SCALE, 1, tip.max(h), &mut rng) {
-                all.insert(c);
-            }
-            i += 1;
-        }
-    }
-    let mut v: Vec<u32> = all.into_iter().collect();
+    let reals: Vec<u32> = real.iter().copied().collect();
+    let window = window_for_scale(DEFAULT_LAPLACE_SCALE, d);
+    let mut v = cover_heights_for(&reals, d, window, tip, &mut OsRng);
     v.shuffle(&mut OsRng);
     v
 }

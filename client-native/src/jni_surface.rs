@@ -1193,31 +1193,17 @@ pub extern "system" fn Java_com_sparrowwallet_perseverus_Native_prefetchFiltersW
         }
         let real_count = all_heights.len();
 
-        // Target: exactly real_count + (real_count * decoys_per_block) unique heights.
-        let target_total = real_count + (real_count * decoys_per_block);
+        // Security review F11: each real height gets its decoys from a window
+        // placed at a random offset around it, filled uniformly, so the real
+        // block is no more likely than any decoy. (The old centred Laplace
+        // draw, one decoy at a time, left the real block in the middle.)
         let mut rng = rand::rngs::OsRng;
-        let max_global_attempts = target_total * 200; // safety valve
-        let mut attempts = 0usize;
-
         if decoys_per_block > 0 {
-            // Round-robin through real heights, sampling decoys for each,
-            // until we reach the target count.
             let real_vec: Vec<u32> = all_heights.iter().copied().collect();
-            let mut idx = 0usize;
-            while all_heights.len() < target_total && attempts < max_global_attempts {
-                let h = real_vec[idx % real_vec.len()];
-                // Sample one candidate at a time for fine-grained fill
-                let candidates = perseverus_core::laplace::select_decoy_blocks(
-                    h, 1, laplace_scale, 1, tip, &mut rng,
-                );
-                for c in candidates {
-                    if c != h && all_heights.insert(c) {
-                        // inserted a new unique height
-                    }
-                }
-                idx += 1;
-                attempts += 1;
-            }
+            let window = perseverus_core::laplace::window_for_scale(laplace_scale, decoys_per_block);
+            all_heights.extend(perseverus_core::laplace::cover_heights_for(
+                &real_vec, decoys_per_block, window, tip, &mut rng,
+            ));
         }
 
         let mut unique: Vec<u32> = all_heights.into_iter().collect();

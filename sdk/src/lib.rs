@@ -191,6 +191,17 @@ impl Perseverus {
                 reason: format!("this SDK ({}) is older than the server's minimum ({}); update it", env!("CARGO_PKG_VERSION"), meta.min_client_version),
             });
         }
+        if let Some(c) = &meta.circuit {
+            if c.version != CIRCUIT_VERSION {
+                return Err(PerseverusError::Unsupported {
+                    reason: format!(
+                        "the server runs spend circuit {}, this SDK is built for {CIRCUIT_VERSION}; \
+                         use the SDK release (and pk.bin) for {}",
+                        c.version, c.version
+                    ),
+                });
+            }
+        }
         let server_pubkey = parse_point_hex(&meta.server_pubkey_hex)
             .ok_or_else(|| PerseverusError::Verification { reason: "server sent an invalid OPRF public key".into() })?;
 
@@ -506,7 +517,19 @@ struct Meta {
     min_client_version: String,
     server_pubkey_hex: String,
     current_month: u32,
+    #[serde(default)]
+    circuit: Option<CircuitMeta>,
 }
+
+#[derive(Deserialize)]
+struct CircuitMeta {
+    version: String,
+}
+
+/// The spend circuit this SDK proves for. A server on another circuit can't
+/// verify this SDK's proofs (nor sign tokens it can use), so `connect` says
+/// so up front instead of every spend failing later.
+pub(crate) const CIRCUIT_VERSION: &str = "v11";
 
 fn get_json_at<T: serde::de::DeserializeOwned>(base_url: &str, path: &str) -> Result<T, PerseverusError> {
     let resp = http_for(base_url, false)?.get(format!("{base_url}{path}")).send()?;

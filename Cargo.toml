@@ -5,6 +5,7 @@ members = [
     "circuits",
     "client-native",
     "sdk",
+    "ceremony",
 ]
 
 [workspace.package]

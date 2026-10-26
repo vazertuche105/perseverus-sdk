@@ -1,0 +1,35 @@
+[package]
+name = "perseverus-ceremony"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Multi-party Groth16 setup (phase 2) for the Perseverus spend circuit"
+
+[[bin]]
+name = "perseverus-ceremony"
+path = "src/main.rs"
+
+[dependencies]
+perseverus-circuits = { path = "../circuits" }
+ark-bn254.workspace = true
+ark-ec.workspace = true
+ark-ff.workspace = true
+ark-ed-on-bn254.workspace = true
+ark-groth16.workspace = true
+ark-poly = "0.5"
+ark-relations.workspace = true
+ark-serialize.workspace = true
+ark-std = { workspace = true, features = ["std"] }
+rand.workspace = true
+rand_chacha = "0.3"
+rayon = "1"
+sha2.workspace = true
+blake2 = "0.10"
+hex.workspace = true
+zeroize = "1"
+anyhow.workspace = true
+
+[dev-dependencies]
+perseverus-core = { path = "../core" }
+ark-snark.workspace = true
+tempfile = "3"

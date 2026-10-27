@@ -74,7 +74,7 @@ Circuit v11 went live on 26 October 2026, with a one-time key rotation:
 - **Spends are unlinkable from purchases.** Before v11, the spend's nullifier was the same value the token points shown at purchase were built from, so the server could match each spend to its purchase (and, for a card purchase, to the card holder). v11 derives the nullifier under its own domain tag.
 - **Validity window in the proof.** The server signs each token's months; the proof enforces them.
 - **Every DLEQ proof binds its whole statement.**
-- **New server key.** `expectedServerPubkey` is now `641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695` and the bundled key is `assets/circuit-v11/pk.bin`. Packs signed by the old key (`dc03c12d…560b`) no longer work, and an SDK built for v10 is refused by a v11 server (`Unsupported`).
+- **New server key.** `expectedServerPubkey` is now `641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695` and the bundled key is `assets/circuit-v11/pk.bin`. Packs signed by the old key (`dc03c12d…560b`) no longer work. An app that still pins the old key is refused at `connect` (`Verification`), and its spends, made with the v10 `pk.bin`, would not verify anyway. From v11 on, the SDK also checks `circuit.version` at `connect` and refuses a server on a different circuit (`Unsupported`), so a future circuit change fails clearly up front.
 - **No API changes.** The SDK calls stay the same; the issuance and spend formats changed inside the SDK.
 
 ## Integrator checklist

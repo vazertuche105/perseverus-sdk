@@ -6,7 +6,7 @@ Goal: in about 15 minutes, analyse a real Bitcoin coin against the production se
 
 - **Rust** (stable, via [rustup](https://rustup.rs)).
 - **JDK 17 or newer**. Gradle comes with the sample through its wrapper.
-- **`pk.bin`**, the spend circuit's proving key, is already in the repo at [`assets/circuit-v10/pk.bin`](../assets/circuit-v10/), and the sample uses it automatically. Its SHA-256 is `ca79225709f48f20ab00549d51d6876e91a383047b13083846e85d326f8b909b`.
+- **`pk.bin`**, the spend circuit's proving key, is already in the repo at [`assets/circuit-v11/pk.bin`](../assets/circuit-v11/), and the sample uses it automatically. Its SHA-256 is `2f59e8bde11819b583d117fc75f1be3c7902aba2eb67e6436b3efad392372483`.
 - **Tor**, running before you start: `brew install tor && tor` on macOS, or `apt install tor` on Linux. It listens on `127.0.0.1:9050`. (Tor Browser works too while it's open: set `MEDUSA_TOR_SOCKS=socks5h://127.0.0.1:9150`.) The sample sends everything over Tor, including its chain-tip lookup, so it's safe to try with a wallet that holds real funds. The SDK refuses clearnet connections to any server except one on your own machine.
 - **Tokens:** either some in a Medusa wallet to import, or a Lightning wallet to pay a 1-token trial invoice (about $0.25).
 
@@ -24,7 +24,7 @@ The first `run` compiles the Rust library, generates the Kotlin bindings (`com.b
 
 ```
 server        http://medusayl5…had.onion
-oprf pubkey   dc03c12db41ba08872513309b777f2375e35215ea46ba5efd8c4a4542c13560b
+oprf pubkey   641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695
 epoch month   202610
 balance       0 tokens
 ```
@@ -77,7 +77,7 @@ What happened:
 3. It spent one token with a zero-knowledge proof over a second Tor circuit. That request contained no heights or txids.
 4. It decrypted the tag and turned it into findings using the catalog.
 
-The server saw nine block heights, and separately one token spend. It never saw which coin was checked. (In the current release it can tell which purchase the token came from; that's fixed in v11, see the [privacy model](07-privacy-model.md#known-limitations).)
+The server saw nine block heights, and separately one token spend. It never saw which coin was checked, and it can't tell which purchase the token came from.
 
 ## The same thing in code
 
@@ -90,7 +90,7 @@ val medusa = Perseverus.connect(Config(
     endpoint = "http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion",
     dataDir = File(context.filesDir, "medusa").path,            // back this up with the wallet
     transport = Transport.Tor(socksProxy = null),               // socks5h://127.0.0.1:9050
-    expectedServerPubkey = "dc03c12db41ba08872513309b777f2375e35215ea46ba5efd8c4a4542c13560b",
+    expectedServerPubkey = "641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695",
     provingKeyPath = bundledPkBinPath,                          // pk.bin shipped with the app
 ))
 

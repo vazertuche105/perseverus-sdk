@@ -89,11 +89,11 @@ Production response (2026-10-15):
 {
   "api_version": "1.0.0",
   "min_client_version": "0.1.0",
-  "server_pubkey_hex": "dc03c12db41ba08872513309b777f2375e35215ea46ba5efd8c4a4542c13560b",
+  "server_pubkey_hex": "641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695",
   "current_month": 202610,
   "test_clock": false,
-  "circuit": { "version": "v10", "pk_sha256": null,
-               "vk_sha256": "11a3a90c43089b3510185c61dd24d4c886fa592d037fe1717e6e6c936b88b103" },
+  "circuit": { "version": "v11", "pk_sha256": null,
+               "vk_sha256": "c2ed4f41c8bdffb1a9bccb5e9aaca9c7bda263d06f2b39b82ffadc3312a6db06" },
   "filters": { "format_version": 5, "tag_format": "v3-lean", "codebook_id": "00a19be3",
                "covered_ranges": [ {"from": 485486, "to": 485486}, {"from": 485488, "to": 485488},
                                    {"from": 485490, "to": 501725}, {"from": 501727, "to": 969210} ] },
@@ -322,7 +322,7 @@ Each key is `Poseidon(pack_id)` as a compressed field element. To use it, rebuil
 ```
 
 - `blinded_point` is the funding txid hashed to the curve and multiplied by a secret random factor, so the server can't recover the txid.
-- `spend` is a Groth16 proof (public inputs: `nullifier`, `current_month`, `revocation_root`). It proves that the client holds an unspent, unrevoked token signed by this server, without revealing which one. The server requires `current_month` to equal its own month; from v11 the token's validity window is also signed and checked inside the proof.
+- `spend` is a Groth16 proof (public inputs: `nullifier`, `current_month`, `revocation_root`). It proves that the client holds an unspent, unrevoked token signed by this server, without revealing which one. The server requires `current_month` to equal its own month, and the token's validity window, signed by the server at issuance, is checked inside the proof.
 - The request contains **no heights, txids or outpoints**, and must go over a different Tor circuit from `filters/batch`.
 
 **`200` response** (illustrative). There is one entry per request, in order, and each succeeds or fails independently:

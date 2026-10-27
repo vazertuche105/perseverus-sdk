@@ -33,7 +33,7 @@ val medusa = Perseverus.connect(Config(
     endpoint = "http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion",
     dataDir = File(context.filesDir, "medusa").path,
     transport = Transport.Tor(socksProxy = "socks5h://127.0.0.1:9050"),
-    expectedServerPubkey = "dc03c12db41ba08872513309b777f2375e35215ea46ba5efd8c4a4542c13560b",
+    expectedServerPubkey = "641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695",
     provingKeyPath = File(context.filesDir, "medusa-pk.bin").path,
 ))
 ```
@@ -46,7 +46,7 @@ val medusa = Perseverus.connect(Config(
 | `dataDir` | `String` | Directory for the token store (`perseverus-packs.json`). **Back it up with the wallet.** Tokens are bearer value; the server keeps no copy. |
 | `transport` | `Transport` | `Transport.Tor(socksProxy)` routes everything through a Tor SOCKS proxy and **fails closed**: if Tor is down, calls fail, they never fall back to clearnet. `socksProxy = null` means `socks5h://127.0.0.1:9050`. `Transport.Direct` is clearnet and **only allowed for a server on the same machine** (`localhost`, `127.x.x.x`, `::1`), for local development; `connect` refuses it for any other endpoint, because the server would see the user's IP address. Loopback endpoints always go direct. |
 | `expectedServerPubkey` | `String?` | Pin the server's OPRF public key (hex). Strongly recommended in production. |
-| `provingKeyPath` | `String?` | Path to `pk.bin` (4,133,200 bytes, SHA-256 `ca7922…909b`). **Ship it inside your app.** The production server does not serve it, so a malicious server can't hand you a different one. If `null`, the SDK tries `GET /v1/circuit/pk` (development servers only) and caches the result. Only `analyzeInputs` needs it. |
+| `provingKeyPath` | `String?` | Path to `pk.bin` (4,394,320 bytes, SHA-256 `2f59e8…2483`). **Ship it inside your app.** The production server does not serve it, so a malicious server can't hand you a different one. If `null`, the SDK tries `GET /v1/circuit/pk` (development servers only) and caches the result. Only `analyzeInputs` needs it. |
 
 **Errors**
 
@@ -217,7 +217,7 @@ fun redeem(purchaseId: String): List<PackInfo>
 
 It returns one `PackInfo` per pack: 13 for `YEARLY`, otherwise 1.
 
-**Why it's built this way.** This one request is the only point where a payment touches the tokens. From v11, later spends can't be linked back to this purchase; in the current release they can (see the [privacy model](07-privacy-model.md#known-limitations)).
+**Why it's built this way.** This one request is the only point where a payment touches the tokens. Later spends can't be linked back to this purchase (see the [privacy model](07-privacy-model.md#the-rules-that-make-it-hold)).
 
 **Safety.** The request carries a random `Idempotency-Key`. If the connection drops without a response, the SDK resends the identical request up to 4 times, and the server replays its stored answer instead of refusing a "used" purchase. The packs are written to disk before the call returns, and before anything else can fail.
 
@@ -237,7 +237,7 @@ toast("Added ${packs.sumOf { it.size.toInt() }} checks")
 - `Network`: Tor or server unreachable after retries. The purchase stays pending; try again later.
 - `Verification`: the server's signatures didn't verify against its public key. Treat the server as faulty and don't retry blindly.
 
-**What the server sees.** A paid credential and the pack's token points. From v11 it can't connect them to any later spend; in the current release it can.
+**What the server sees.** A paid credential and the pack's token points. It can't connect them to any later spend.
 
 ---
 

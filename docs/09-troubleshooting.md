@@ -10,7 +10,7 @@ Find the message you're seeing. In Kotlin, `e.message` prints as `reason=…` or
 | `Network`: `… error connecting to socks proxy: … failed to create underlying connection` | Nothing is listening at the SOCKS address (Tor not running, or on another port such as Tor Browser's 9150), or the SDK was built with `--no-default-features`. | Start Tor (`brew services start tor`) and test it with the `curl` above. Rebuild with default features. |
 | `Network`: timeouts, or slow first call | Building a new Tor circuit to an onion service takes a few seconds, sometimes more on mobile. | Retry. The first call after Tor starts is often the slowest. |
 | `InvalidArgument`: `Transport.Direct is only allowed for a server on this machine…` | `Transport.Direct` with a remote server (production, or a dev server on another host). | Use `Transport.Tor` with the `.onion` endpoint. `Direct` is only for a server on `localhost`. |
-| `Verification`: `server pubkey … does not match pinned …` | You're talking to a different server, or the pinned key has a typo. | Check `endpoint` and the key (`dc03c12d…560b`). **Don't** turn off pinning to make it go away. |
+| `Verification`: `server pubkey … does not match pinned …` | You're talking to a different server, or the pinned key has a typo. | Check `endpoint` and the key (`64194625…d695`). **Don't** turn off pinning to make it go away. |
 | `Unsupported`: `server API … is not 1.x` / `older than the server's minimum` | The SDK version and server version are incompatible. | Update the SDK to a current commit and rebuild. |
 | `Storage`: `create …` / `write …` | `dataDir` isn't writable. | Use app-private storage (`context.filesDir`). |
 | `Storage`: `unsupported store version` | The store was written by a newer SDK. | Don't downgrade the SDK over existing data. |
@@ -35,7 +35,7 @@ Find the message you're seeing. In Kotlin, `e.message` prints as `reason=…` or
 |---|---|---|
 | `InvalidArgument`: `… has no block height (unconfirmed inputs cannot be analysed)` | `blockHeight = 0`. | Leave unconfirmed inputs out of the list. |
 | `InvalidArgument`: `txid … is not 32 bytes` / hex error | Not a 64-character hex txid. | Pass the funding txid in explorer order. |
-| `InvalidArgument`: `proving key …: No such file` / `is not a valid pk.bin` | `provingKeyPath` is wrong, or the file is corrupt or truncated. | Copy `pk.bin` from assets and check its SHA-256 (`ca7922…909b`). |
+| `InvalidArgument`: `proving key …: No such file` / `is not a valid pk.bin` | `provingKeyPath` is wrong, or the file is corrupt or truncated. | Copy `pk.bin` from assets and check its SHA-256 (`2f59e8…2483`). |
 | `Server` 404 `not_found: this server does not serve the proving key…` | `provingKeyPath = null` against production. | Ship `pk.bin` and set `provingKeyPath`. |
 | `InsufficientTokens(needed, available)` | Not enough **active** tokens. Packs from a yearly plan that haven't started don't count, and neither do revoked packs (`PackInfo.revoked`, after a card chargeback). | Buy tokens. Nothing was spent. |
 | Every input `UNGRADED` | Normal for dust, OP_RETURN, ordinal, runes and Counterparty/Omni transactions. Also if you passed the **spending** txid instead of the **funding** txid, or the wrong height for the funding transaction. | Check that `txid` is the transaction that *created* the coin and `blockHeight` is where *that* transaction confirmed. |

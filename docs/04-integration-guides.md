@@ -28,13 +28,13 @@ The SDK asks Tor for **separate circuits** for filter downloads, token spends an
 
 ### `pk.bin`
 
-The spend proof needs the circuit's proving key, [`assets/circuit-v10/pk.bin`](../assets/circuit-v10/) in this repo. Ship it in the app (about 4 MB) and copy it to internal storage on first launch. The SDK needs a file path:
+The spend proof needs the circuit's proving key, [`assets/circuit-v11/pk.bin`](../assets/circuit-v11/) in this repo. Ship it in the app (about 4 MB) and copy it to internal storage on first launch. The SDK needs a file path:
 
 ```kotlin
-private const val PK_SHA256 = "ca79225709f48f20ab00549d51d6876e91a383047b13083846e85d326f8b909b"
+private const val PK_SHA256 = "2f59e8bde11819b583d117fc75f1be3c7902aba2eb67e6436b3efad392372483"
 
 fun provingKeyFile(context: Context): File {
-    val f = File(context.filesDir, "medusa-pk-v10.bin")
+    val f = File(context.filesDir, "medusa-pk-v11.bin")
     if (!f.exists()) {
         context.assets.open("medusa/pk.bin").use { input -> f.outputStream().use { input.copyTo(it) } }
     }
@@ -44,7 +44,7 @@ fun provingKeyFile(context: Context): File {
 }
 ```
 
-When the circuit version changes (`GET /v1/meta` → `circuit.version`, currently `v10`), a new `assets/circuit-v<N>/pk.bin` will be added. Version the file name so the old and new keys don't collide.
+When the circuit version changes (`GET /v1/meta` → `circuit.version`, currently `v11`), a new `assets/circuit-v<N>/pk.bin` will be added. Version the file name so the old and new keys don't collide.
 
 ### One instance
 
@@ -58,7 +58,7 @@ class Medusa(private val context: Context, private val socks: String) {
             endpoint = "http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion",
             dataDir = File(context.filesDir, "medusa").path,
             transport = Transport.Tor(socks),
-            expectedServerPubkey = "dc03c12db41ba08872513309b777f2375e35215ea46ba5efd8c4a4542c13560b",
+            expectedServerPubkey = "641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695",
             provingKeyPath = provingKeyFile(context).path,
         )).also { instance = it }
     }
@@ -280,7 +280,7 @@ Branch on the code (`e.reason.substringBefore(':')` for `Server`, `report.error.
 ## Release checklist
 
 - [ ] `Transport.Tor` everywhere in release builds (the SDK already refuses `Direct` for anything but localhost).
-- [ ] `expectedServerPubkey` pinned to `dc03c12d…560b`.
+- [ ] `expectedServerPubkey` pinned to `64194625…d695`.
 - [ ] `pk.bin` bundled and its SHA-256 checked.
 - [ ] `dataDir` included in the wallet backup and excluded from cloud sync between devices.
 - [ ] Pending purchases resumed at startup.

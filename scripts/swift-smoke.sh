@@ -18,7 +18,7 @@ PORT=18431
 python3 - "$PORT" <<'PY' &
 import http.server, json, sys
 META = {"api_version": "1.0", "min_client_version": "0.0.0",
-        "server_pubkey_hex": "dc03c12db41ba08872513309b777f2375e35215ea46ba5efd8c4a4542c13560b",
+        "server_pubkey_hex": "641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695",
         "current_month": 202610}
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):

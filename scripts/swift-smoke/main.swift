@@ -5,7 +5,7 @@
 // that serves only GET /v1/meta.
 import Foundation
 
-let pub = "dc03c12db41ba08872513309b777f2375e35215ea46ba5efd8c4a4542c13560b"
+let pub = "641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695"
 var failures = 0
 
 func check(_ ok: Bool, _ what: String) {

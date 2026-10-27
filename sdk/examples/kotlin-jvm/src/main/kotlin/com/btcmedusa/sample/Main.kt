@@ -17,7 +17,7 @@
 //   MEDUSA_TOR_SOCKS Tor SOCKS proxy (default: socks5h://127.0.0.1:9050)
 //   MEDUSA_DATA_DIR  where this sample keeps its tokens (default: ~/.perseverus-sample)
 //   MEDUSA_PROVING_KEY  path to the circuit's pk.bin (default: the repo's
-//                    assets/circuit-v10/pk.bin; the production server
+//                    assets/circuit-v11/pk.bin; the production server
 //                    doesn't serve it)
 
 package com.btcmedusa.sample
@@ -50,7 +50,7 @@ private const val DEFAULT_ENDPOINT = "http://medusayl5rrmgnekpabcduw7onhvdowmfar
 private const val DEFAULT_TOR_SOCKS = "socks5h://127.0.0.1:9050"
 // mempool.space's own onion service, for the chain tip (see `analyze`).
 private const val MEMPOOL_ONION_TIP = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/api/blocks/tip/height"
-private const val BUNDLED_PK = "../../../assets/circuit-v10/pk.bin"
+private const val BUNDLED_PK = "../../../assets/circuit-v11/pk.bin"
 
 fun main(args: Array<String>) {
     val endpoint = System.getenv("MEDUSA_ENDPOINT") ?: DEFAULT_ENDPOINT

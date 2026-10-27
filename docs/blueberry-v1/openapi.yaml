@@ -506,7 +506,7 @@ components:
           required: [version, pk_sha256, vk_sha256]
           additionalProperties: false
           properties:
-            version: { type: string, example: v10 }
+            version: { type: string, example: v11 }
             pk_sha256: { type: [string, 'null'], pattern: '^[0-9a-f]{64}$' }
             vk_sha256: { type: [string, 'null'], pattern: '^[0-9a-f]{64}$' }
         filters:

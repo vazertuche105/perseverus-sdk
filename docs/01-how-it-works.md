@@ -50,7 +50,7 @@ Each blind question costs one **token**. Tokens make the service sustainable, an
 - **Buying.** Tokens come in **packs** (normally 100). The wallet generates the tokens itself and the server signs them when the payment clears.
 - **Spending.** The wallet sends a **zero-knowledge proof** (Groth16) that says *"I hold a token the server signed, it hasn't expired, and its pack hasn't been revoked"* without revealing which token. Alongside it goes a **nullifier**, a value derived from the token that the server records so the same token can't be spent twice.
 
-The goal is that the server sees *some* valid token was spent, but not which purchase it came from. **In the current release that isn't yet true:** the server can match a spend to its purchase (though never to what was checked). The fix ships in v11; see [Privacy model](07-privacy-model.md#known-limitations).
+The server sees that *some* valid token was spent, but not which purchase it came from: nothing a spend reveals can be computed from what the server saw when the pack was bought (since circuit v11; see [Privacy model](07-privacy-model.md#the-rules-that-make-it-hold)).
 
 Packs are valid for a window of months (a single pack: this month and next). They can be **revoked**, for example after a card chargeback. Revocation is checked inside the zero-knowledge proof, against a public revocation tree.
 

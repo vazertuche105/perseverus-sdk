@@ -19,7 +19,7 @@ jobs:
         run: python3 scripts/check-no-logging.py
       - name: Check bundled proving key
         shell: bash
-        run: cd assets/circuit-v10 && shasum -a 256 -c pk.bin.sha256
+        run: cd assets/circuit-v11 && shasum -a 256 -c pk.bin.sha256
       - name: Test
         run: cargo test --workspace --release
       - name: Generate Kotlin bindings

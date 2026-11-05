@@ -87,6 +87,18 @@ impl From<reqwest::blocking::Client> for Http {
     }
 }
 
+impl From<&reqwest::blocking::Client> for Http {
+    fn from(c: &reqwest::blocking::Client) -> Self {
+        c.clone().into()
+    }
+}
+
+impl From<&Http> for Http {
+    fn from(h: &Http) -> Self {
+        h.clone()
+    }
+}
+
 impl Http {
     /// A default built-in client (no proxy configured, `timeout` per request).
     pub fn builtin_default(timeout: Duration) -> Self {

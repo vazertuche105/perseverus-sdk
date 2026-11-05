@@ -223,8 +223,9 @@ impl SpendClient {
     /// Fetch and deserialize the server's Groth16 proving key.
     pub fn fetch_proving_key(
         base_url: &str,
-        http: &crate::net::Http,
+        http: impl Into<crate::net::Http>,
     ) -> Result<ProvingKey<Bn254>, SpendClientError> {
+        let http: crate::net::Http = http.into();
         let url = format!("{}/circuit/pk", base_url.trim_end_matches('/'));
         let resp = http.get(&url).send()?;
         if !resp.status().is_success() {
@@ -241,7 +242,7 @@ impl SpendClient {
     /// server and write it to the cache path for next time.
     pub fn fetch_proving_key_cached(
         base_url: &str,
-        http: &crate::net::Http,
+        http: impl Into<crate::net::Http>,
         cache_path: &std::path::Path,
     ) -> Result<ProvingKey<Bn254>, SpendClientError> {
         if cache_path.exists() {
@@ -261,6 +262,7 @@ impl SpendClient {
         }
 
         crate::debug_log!("[bootstrap] downloading pk from server...");
+        let http: crate::net::Http = http.into();
         let url = format!("{}/circuit/pk", base_url.trim_end_matches('/'));
         let resp = http.get(&url).send()?;
         if !resp.status().is_success() {
@@ -286,8 +288,9 @@ impl SpendClient {
     /// Fetch and deserialize the server's Groth16 verifying key.
     pub fn fetch_verifying_key(
         base_url: &str,
-        http: &crate::net::Http,
+        http: impl Into<crate::net::Http>,
     ) -> Result<ark_groth16::VerifyingKey<Bn254>, SpendClientError> {
+        let http: crate::net::Http = http.into();
         let url = format!("{}/circuit/vk", base_url.trim_end_matches('/'));
         let resp = http.get(&url).send()?;
         if !resp.status().is_success() {

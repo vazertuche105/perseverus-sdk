@@ -26,6 +26,7 @@ uniffi::setup_scaffolding!();
 
 pub mod analyze;
 pub mod error;
+pub mod net;
 pub mod report;
 pub mod store;
 
@@ -50,6 +51,8 @@ pub fn min_decoys_per_input() -> u32 {
     MIN_DECOYS_PER_INPUT
 }
 pub use error::PerseverusError;
+pub use net::{Header, PerseverusTransport, TransportError, TransportRequest, TransportResponse};
+use net::{Circuit, Net};
 pub use report::{Finding, InputRef, PrivacyReport, Recommendation, ReportError, ReportStatus, Severity, SeverityCounts};
 pub use store::PackInfo;
 
@@ -62,7 +65,7 @@ const PK_CACHE_FILE: &str = "perseverus-circuit-pk.bin";
 
 // ─── Configuration ───────────────────────────────────────────────────
 
-#[derive(Debug, Clone, uniffi::Enum)]
+#[derive(Clone, uniffi::Enum)]
 pub enum Transport {
     /// Route everything through a Tor SOCKS proxy (fails closed if Tor is
     /// down). `socks_proxy` defaults to `socks5h://127.0.0.1:9050`.
@@ -71,6 +74,20 @@ pub enum Transport {
     /// `127.0.0.0/8`, `::1`). `connect` refuses it for any other endpoint,
     /// because the server would see the user's IP address.
     Direct,
+    /// The wallet sends every request itself, e.g. over its own Tor client.
+    /// The SDK then never opens a network connection of its own. See
+    /// [`PerseverusTransport`] for the rules the transport must follow.
+    Custom { transport: Arc<dyn PerseverusTransport> },
+}
+
+impl std::fmt::Debug for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Transport::Tor { socks_proxy } => f.debug_struct("Tor").field("socks_proxy", socks_proxy).finish(),
+            Transport::Direct => f.write_str("Direct"),
+            Transport::Custom { .. } => f.write_str("Custom"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -149,6 +166,7 @@ pub struct Perseverus {
     proving_key_path: Option<String>,
     server_pubkey: EdwardsProjective,
     store: Store,
+    net: Net,
     query: QueryClient,
     spend: Mutex<Option<SpendClient>>,
 }
@@ -163,26 +181,23 @@ impl Perseverus {
         if base_url.is_empty() {
             return Err(PerseverusError::InvalidArgument { reason: "endpoint is empty".into() });
         }
-        match &config.transport {
+        check_endpoint(&base_url, &config.transport)?;
+        let net = match &config.transport {
             Transport::Direct => {
-                if !is_loopback_endpoint(&base_url) {
-                    return Err(PerseverusError::InvalidArgument {
-                        reason: "Transport.Direct is only allowed for a server on this machine (localhost); \
-                                 anything else would show the server your IP address. \
-                                 Use Transport.Tor with the .onion endpoint"
-                            .into(),
-                    });
-                }
-                transport::configure("DIRECT", None)
+                transport::configure("DIRECT", None).map_err(|m| PerseverusError::InvalidArgument { reason: m })?;
+                Net::builtin(&base_url, HTTP_TIMEOUT)
             }
-            Transport::Tor { socks_proxy } => transport::configure("TOR", socks_proxy.as_deref()),
-        }
-        .map_err(|m| PerseverusError::InvalidArgument { reason: m })?;
+            Transport::Tor { socks_proxy } => {
+                transport::configure("TOR", socks_proxy.as_deref()).map_err(|m| PerseverusError::InvalidArgument { reason: m })?;
+                Net::builtin(&base_url, HTTP_TIMEOUT)
+            }
+            Transport::Custom { transport } => Net::custom(&base_url, transport.clone(), HTTP_TIMEOUT),
+        };
 
         let data_dir = PathBuf::from(&config.data_dir);
         let store = Store::open(&data_dir)?;
-        let query = QueryClient::new(&base_url).with_v1().with_http(http_for(&base_url, false)?);
-        let meta: Meta = get_json_at(&base_url, "/v1/meta")?;
+        let query = QueryClient::new(&base_url).with_v1().with_http(net.http(Circuit::Query)?);
+        let meta: Meta = net.get_json(Circuit::Query, "/v1/meta")?;
         if !meta.api_version.starts_with("1.") {
             return Err(PerseverusError::Unsupported { reason: format!("server API {} is not 1.x", meta.api_version) });
         }
@@ -220,6 +235,7 @@ impl Perseverus {
             proving_key_path: config.proving_key_path,
             server_pubkey,
             store,
+            net,
             query,
             spend: Mutex::new(None),
         }))
@@ -232,7 +248,7 @@ impl Perseverus {
 
     /// Current server epoch month (YYYYMM).
     pub fn current_month(&self) -> Result<u32, PerseverusError> {
-        let m: Meta = self.get_json("/v1/meta")?;
+        let m: Meta = self.net.get_json(Circuit::Query, "/v1/meta")?;
         Ok(m.current_month)
     }
 
@@ -267,11 +283,16 @@ impl Perseverus {
             expires_at: u64,
             payment: Payment,
         }
-        let p: V1Purchase = self.post_json(
+        // Its own circuit, never the query circuit: a purchase (and for a
+        // card, the payer) must not be linkable to the filters this wallet
+        // downloads. Status polls for this purchase reuse the same circuit.
+        let tag = self.net.new_purchase_tag();
+        let p: V1Purchase = self.net.post_json(
+            Circuit::Named(&tag),
             "/v1/tokens/purchase",
             &serde_json::json!({ "method": method_str(method), "plan": plan_str(plan) }),
-            false,
         )?;
+        self.net.remember_purchase(&p.purchase_id, tag);
         let payment_request = match p.payment.kind.as_str() {
             "lightning" => p.payment.bolt11,
             _ => p.payment.checkout_url,
@@ -333,7 +354,8 @@ impl Perseverus {
         struct S {
             state: String,
         }
-        let s: S = self.get_json(&format!("/v1/tokens/purchase/{purchase_id}/status"))?;
+        let tag = self.net.purchase_tag(&purchase_id);
+        let s: S = self.net.get_json(Circuit::Named(&tag), &format!("/v1/tokens/purchase/{purchase_id}/status"))?;
         Ok(match s.state.as_str() {
             "paid" => PurchaseState::Paid,
             "redeemed" => PurchaseState::Redeemed,
@@ -365,7 +387,7 @@ impl Perseverus {
         let per_pack = (p.tokens as usize / schedule.len()).max(1);
         let issuance = IssuanceClient::new(&self.base_url, self.server_pubkey)
             .with_v1()
-            .with_http(http_for(&self.base_url, true)?);
+            .with_http(self.net.http(Circuit::Fresh("issuance"))?);
         let issued = issuance.redeem_v1(per_pack, &schedule, V1Credential::PurchaseId(&purchase_id), &mut OsRng)?;
 
         // Store first: the packs are already signed, so nothing after this
@@ -375,6 +397,7 @@ impl Perseverus {
             infos.push(self.store.add_pack(pack, &p.method, now())?);
         }
         self.store.remove_pending_purchase(&purchase_id)?;
+        self.net.forget_purchase(&purchase_id);
 
         // Card packs publish an attribution entry (chargeback handling), each
         // over its own isolated circuit, as Sparrow does. A failure here
@@ -490,23 +513,14 @@ impl Perseverus {
                     SpendClient::new(&self.base_url, pk, self.server_pubkey).with_v1()
                 }
                 None => {
-                    let http = http_for(&self.base_url, false)?;
+                    let http = self.net.http(Circuit::Query)?;
                     SpendClient::bootstrap_with_cache(&self.base_url, self.server_pubkey, http, &self.data_dir.join(PK_CACHE_FILE))?
                         .with_v1()
                 }
             };
             *guard = Some(sc);
         }
-        Ok(guard.as_ref().unwrap().clone().with_http(http_for(&self.base_url, true)?))
-    }
-
-    fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, PerseverusError> {
-        get_json_at(&self.base_url, path)
-    }
-
-    fn post_json<T: serde::de::DeserializeOwned>(&self, path: &str, body: &serde_json::Value, isolated: bool) -> Result<T, PerseverusError> {
-        let resp = http_for(&self.base_url, isolated)?.post(format!("{}{}", self.base_url, path)).json(body).send()?;
-        json_or_error(resp)
+        Ok(guard.as_ref().unwrap().clone().with_http(self.net.http(Circuit::Fresh("spend"))?))
     }
 }
 
@@ -531,11 +545,6 @@ struct CircuitMeta {
 /// so up front instead of every spend failing later.
 pub(crate) const CIRCUIT_VERSION: &str = "v11";
 
-fn get_json_at<T: serde::de::DeserializeOwned>(base_url: &str, path: &str) -> Result<T, PerseverusError> {
-    let resp = http_for(base_url, false)?.get(format!("{base_url}{path}")).send()?;
-    json_or_error(resp)
-}
-
 fn parse_point_hex(h: &str) -> Option<EdwardsProjective> {
     let b = hex::decode(h).ok()?;
     ark_ed_on_bn254::EdwardsAffine::deserialize_compressed(&b[..]).ok().map(Into::into)
@@ -549,31 +558,6 @@ fn version_lt(a: &str, b: &str) -> bool {
     x.resize(n, 0);
     y.resize(n, 0);
     x < y
-}
-
-fn json_or_error<T: serde::de::DeserializeOwned>(resp: reqwest::blocking::Response) -> Result<T, PerseverusError> {
-    let status = resp.status();
-    if !status.is_success() {
-        let message = error::server_reason(resp.text().unwrap_or_default());
-        return Err(PerseverusError::Server { status: status.as_u16(), reason: message });
-    }
-    resp.json().map_err(|e| PerseverusError::Internal { reason: format!("bad response: {e}") })
-}
-
-/// HTTP client for the configured transport. Loopback endpoints always go
-/// direct (Tor refuses to connect to 127.0.0.1). `isolated` asks Tor for a
-/// fresh circuit (random SOCKS credentials).
-fn http_for(url: &str, isolated: bool) -> Result<reqwest::blocking::Client, PerseverusError> {
-    let l = url.to_ascii_lowercase();
-    if l.contains("://127.0.0.1") || l.contains("://localhost") || l.contains("://[::1]") {
-        return reqwest::blocking::Client::builder()
-            .no_proxy()
-            .timeout(HTTP_TIMEOUT)
-            .build()
-            .map_err(PerseverusError::network);
-    }
-    let c = if isolated { transport::build_isolated_client(HTTP_TIMEOUT) } else { transport::build_client(HTTP_TIMEOUT) };
-    c.map_err(PerseverusError::network)
 }
 
 fn point_hex(p: &EdwardsProjective) -> String {
@@ -632,11 +616,44 @@ mod tests {
 
 /// True if `endpoint` is a URL whose host is this machine: `localhost`, an
 /// IPv4 loopback address (127.0.0.0/8) or `::1`.
-fn is_loopback_endpoint(endpoint: &str) -> bool {
+pub(crate) fn is_loopback_endpoint(endpoint: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(endpoint) else { return false };
     let Some(host) = url.host_str() else { return false };
     let host = host.trim_start_matches('[').trim_end_matches(']');
     host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Refuse endpoints that would leak the user's IP address or the content of
+/// their requests:
+///
+/// | endpoint                 | Direct  | Tor / Custom        |
+/// |--------------------------|---------|---------------------|
+/// | this machine (localhost) | allowed | allowed             |
+/// | `.onion`                 | refused | allowed (http or https) |
+/// | anything else (clearnet) | refused | `https://` only     |
+///
+/// Over clearnet the request leaves Tor at an exit relay run by a stranger;
+/// without HTTPS that relay could read every request.
+fn check_endpoint(endpoint: &str, transport: &Transport) -> Result<(), PerseverusError> {
+    let bad = |reason: String| Err(PerseverusError::InvalidArgument { reason });
+    let Ok(url) = reqwest::Url::parse(endpoint) else { return bad(format!("endpoint {endpoint:?} is not a URL")) };
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return bad(format!("endpoint must start with https:// or http://, not {}://", url.scheme()));
+    }
+    if is_loopback_endpoint(endpoint) {
+        return Ok(());
+    }
+    if matches!(transport, Transport::Direct) {
+        return bad("Transport.Direct is only allowed for a server on this machine (localhost); \
+                    anything else would show the server your IP address. \
+                    Use Transport.Tor or Transport.Custom"
+            .into());
+    }
+    let onion = url.host_str().is_some_and(|h| h.to_ascii_lowercase().ends_with(".onion"));
+    if !onion && url.scheme() != "https" {
+        return bad("a clearnet endpoint must use https://: without it, the Tor exit relay could read every request".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

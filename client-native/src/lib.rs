@@ -18,6 +18,7 @@ pub mod query_client;
 pub mod query;
 pub mod codebook;
 pub mod transport;
+pub mod net;
 pub mod pack_blob;
 
 #[cfg(feature = "jni")]

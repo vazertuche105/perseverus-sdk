@@ -24,7 +24,45 @@ Production is a Tor onion service, and the SDK needs a **SOCKS5 proxy** to reach
 
 Use the `socks5h://` scheme so hostnames, including the `.onion`, are resolved inside Tor. The SDK fails closed: if the proxy isn't up, calls throw `Network` and never fall back to clearnet. Start Medusa features only once your Tor layer reports it's ready.
 
-The SDK asks Tor for **separate circuits** for filter downloads, token spends and redemptions, using random SOCKS credentials. This needs no setup, but it relies on Tor's default `IsolateSOCKSAuth` behaviour, so don't turn that off in an embedded Tor config.
+The SDK asks Tor for **separate circuits** for filter downloads, purchases, token spends and redemptions, using a different SOCKS username for each. This needs no setup, but it relies on Tor's default `IsolateSOCKSAuth` behaviour, so don't turn that off in an embedded Tor config.
+
+### Your own Tor client (`Transport.Custom`)
+
+If your wallet has its own Tor implementation and doesn't expose a SOCKS port, pass the SDK a transport instead. The SDK then hands you every request, and your Tor client sends it:
+
+```kotlin
+class WalletTorTransport(private val tor: MyTorClient) : PerseverusTransport {
+    override fun send(request: TransportRequest): TransportResponse = runBlocking {
+        if (!tor.isReady()) throw TransportException.Failed("Tor not ready")
+        try {
+            // One circuit per tag: same tag, same circuit; different tags, different circuits.
+            val r = tor.http(
+                circuit = request.circuit,
+                method = request.method,
+                url = request.url,
+                headers = request.headers.map { it.name to it.value },
+                body = request.body,
+                timeoutMs = request.timeoutMs.toLong(),
+            )
+            TransportResponse(r.status.toUShort(), r.headers.map { Header(it.first, it.second) }, r.body)
+        } catch (e: IOException) {
+            throw TransportException.Failed(e.message ?: "request failed")
+        }
+    }
+}
+
+val medusa = Perseverus.connect(Config(
+    endpoint = endpoint,  // the .onion, or the clearnet https:// endpoint if your Tor client can't reach onions
+    dataDir = File(context.filesDir, "medusa").path,
+    transport = Transport.Custom(WalletTorTransport(tor)),
+    expectedServerPubkey = "641946251b0dd34a770b6a567cc393c281ee15c28e2a44743e24a1aeb1f8d695",
+    provingKeyPath = provingKeyFile(context).path,
+))
+```
+
+`MyTorClient` stands for your own client. The rules are in the [SDK reference](03-sdk-reference.md#custom-transport-perseverustransport). The one that matters most: **requests with different `circuit` tags must leave Tor through different circuits**, and nothing may ever bypass Tor. The Kotlin sample includes a complete working transport, [`SocksTransport.kt`](../sdk/examples/kotlin-jvm/src/main/kotlin/com/btcmedusa/sample/SocksTransport.kt): about 100 lines of HTTP/1.1 and TLS over a SOCKS stream. To adapt it, replace its `openTorStream` with your client's "open a stream on the circuit for this tag" call.
+
+If your Tor client can't reach onion services, use a clearnet endpoint. It must be `https://`: the request leaves Tor at an exit relay, and HTTPS keeps that relay from reading it. `connect` refuses a clearnet `http://` endpoint. A clearnet HTTPS endpoint for the production server, which accepts connections from Tor exits only, is being set up; this guide will give its address once it's live.
 
 ### `pk.bin`
 
@@ -279,7 +317,8 @@ Branch on the code (`e.reason.substringBefore(':')` for `Server`, `report.error.
 
 ## Release checklist
 
-- [ ] `Transport.Tor` everywhere in release builds (the SDK already refuses `Direct` for anything but localhost).
+- [ ] `Transport.Tor` or `Transport.Custom` everywhere in release builds (the SDK already refuses `Direct` for anything but localhost).
+- [ ] With `Transport.Custom`: different circuit tags really get different circuits, and nothing falls back to a direct connection when Tor isn't ready.
 - [ ] `expectedServerPubkey` pinned to `64194625…d695`.
 - [ ] `pk.bin` bundled and its SHA-256 checked.
 - [ ] `dataDir` included in the wallet backup and excluded from cloud sync between devices.

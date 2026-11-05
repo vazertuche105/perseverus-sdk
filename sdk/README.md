@@ -40,7 +40,7 @@ The SDK talks only to the `/v1` API.
 
 ## Design choices
 
-- **Tor fails closed.** `Transport.Tor` never falls back to clearnet. There's no OHTTP option because `client-native`'s OHTTP mode is still a stub that connects directly. `Direct` is for development only, and `connect` refuses to use it with a `.onion` endpoint.
+- **Tor fails closed.** `Transport.Tor` never falls back to clearnet. `Transport.Custom` hands every request to the wallet's own transport (e.g. its own Tor client), tagged with the circuit it must use; the SDK then opens no connections itself. Clearnet endpoints must be `https://`. There's no OHTTP option because `client-native`'s OHTTP mode is still a stub that connects directly. `Direct` is for development only, and `connect` refuses to use it with a `.onion` endpoint.
 - **Tokens are marked used before the spend request goes out.** If the server rejects an individual spend before burning it, the token is given back. If the whole request fails in transit, the token stays marked used, because the SDK can't tell whether the server burned it.
 - **Packs are stored in Sparrow's blob format.** That format was moved out of the Sparrow-only JNI module into `client-native/src/pack_blob.rs`, and the Sparrow build is unchanged.
 

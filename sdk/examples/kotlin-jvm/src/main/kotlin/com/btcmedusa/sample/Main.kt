@@ -15,6 +15,10 @@
 //   MEDUSA_ENDPOINT  server URL (default: the production .onion over Tor; a
 //                    localhost URL uses a direct connection, for a local server)
 //   MEDUSA_TOR_SOCKS Tor SOCKS proxy (default: socks5h://127.0.0.1:9050)
+//   MEDUSA_TRANSPORT custom = send every request from Kotlin (SocksTransport.kt)
+//                    instead of the SDK's built-in Tor client, and list the
+//                    circuit each request went over. How a wallet plugs in
+//                    its own Tor client.
 //   MEDUSA_DATA_DIR  where this sample keeps its tokens (default: ~/.perseverus-sample)
 //   MEDUSA_PROVING_KEY  path to the circuit's pk.bin (default: the repo's
 //                    assets/circuit-v11/pk.bin; the production server
@@ -57,7 +61,16 @@ fun main(args: Array<String>) {
     val dataDir = sampleDataDir().path
     val torSocks = System.getenv("MEDUSA_TOR_SOCKS") ?: DEFAULT_TOR_SOCKS
     // The SDK only allows a direct connection to a server on this machine.
-    val transport = if (isLocalhost(endpoint)) Transport.Direct else Transport.Tor(socksProxy = torSocks)
+    val custom = System.getenv("MEDUSA_TRANSPORT") == "custom"
+    val recorder = if (custom) {
+        val hp = torSocks.substringAfter("://").substringAfter("@").split(":")
+        RecordingTransport(SocksTorTransport(hp[0], hp.getOrNull(1)?.toInt() ?: 9050))
+    } else null
+    val transport = when {
+        recorder != null -> Transport.Custom(recorder)
+        isLocalhost(endpoint) -> Transport.Direct
+        else -> Transport.Tor(socksProxy = torSocks)
+    }
     // Real wallets ship pk.bin inside the app. Gradle runs this from
     // sdk/examples/kotlin-jvm, so ../../../ is the repo root.
     val provingKey = System.getenv("MEDUSA_PROVING_KEY")
@@ -72,6 +85,13 @@ fun main(args: Array<String>) {
             "buy-dev" -> buy(medusa, Plan.DEV)
             "analyze" -> analyze(medusa, args.drop(1))
             else -> usage()
+        }
+        if (recorder != null) {
+            println("\nrequests by circuit (sent by the Kotlin transport):")
+            for ((circuit, reqs) in recorder.seen.groupBy({ it.first }, { it.second })) {
+                println("  $circuit")
+                reqs.groupingBy { it }.eachCount().forEach { (r, n) -> println("      ${if (n > 1) "${n}x " else ""}$r") }
+            }
         }
     } catch (e: PerseverusException) {
         System.err.println("error: ${e::class.simpleName}: ${e.message}")

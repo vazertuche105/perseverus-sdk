@@ -57,6 +57,19 @@ impl From<reqwest::Error> for PerseverusError {
     }
 }
 
+impl From<perseverus_client_native::net::NetError> for PerseverusError {
+    fn from(e: perseverus_client_native::net::NetError) -> Self {
+        use perseverus_client_native::net::NetError as N;
+        match e {
+            N::Builtin(e) => e.into(),
+            N::Transport(reason) => Self::Network { reason },
+            N::Status(status) => Self::Server { status, reason: format!("HTTP {status}") },
+            N::Decode(m) => Self::Internal { reason: format!("bad response: {m}") },
+            N::Encode(m) => Self::Internal { reason: format!("couldn't encode request: {m}") },
+        }
+    }
+}
+
 /// An error and all its causes, `outer: inner: …`, so a failure like
 /// "error sending request" also says *why* (e.g. "error connecting to socks
 /// proxy"). Causes never include request bodies.

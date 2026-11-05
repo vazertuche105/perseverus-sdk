@@ -44,7 +44,7 @@ val medusa = Perseverus.connect(Config(
 |---|---|---|
 | `endpoint` | `String` | Server base URL, without `/v1`. Production is the `.onion` above. |
 | `dataDir` | `String` | Directory for the token store (`perseverus-packs.json`). **Back it up with the wallet.** Tokens are bearer value; the server keeps no copy. |
-| `transport` | `Transport` | `Transport.Tor(socksProxy)` routes everything through a Tor SOCKS proxy and **fails closed**: if Tor is down, calls fail, they never fall back to clearnet. `socksProxy = null` means `socks5h://127.0.0.1:9050`. `Transport.Direct` is clearnet and **only allowed for a server on the same machine** (`localhost`, `127.x.x.x`, `::1`), for local development; `connect` refuses it for any other endpoint, because the server would see the user's IP address. Loopback endpoints always go direct. |
+| `transport` | `Transport` | `Transport.Tor(socksProxy)` routes everything through a Tor SOCKS proxy and **fails closed**: if Tor is down, calls fail, they never fall back to clearnet. `socksProxy = null` means `socks5h://127.0.0.1:9050`. `Transport.Custom(transport)` hands every request to your own code instead, e.g. your own Tor client; see [Custom transport](#custom-transport-perseverustransport). `Transport.Direct` is clearnet and **only allowed for a server on the same machine** (`localhost`, `127.x.x.x`, `::1`), for local development; `connect` refuses it for any other endpoint, because the server would see the user's IP address. With `Tor`, loopback endpoints always go direct. |
 | `expectedServerPubkey` | `String?` | Pin the server's OPRF public key (hex). Strongly recommended in production. |
 | `provingKeyPath` | `String?` | Path to `pk.bin` (4,394,320 bytes, SHA-256 `2f59e8…2483`). **Ship it inside your app.** The production server does not serve it, so a malicious server can't hand you a different one. If `null`, the SDK tries `GET /v1/circuit/pk` (development servers only) and caches the result. Only `analyzeInputs` needs it. |
 
@@ -52,12 +52,22 @@ val medusa = Perseverus.connect(Config(
 
 | Exception | Cause |
 |---|---|
-| `InvalidArgument` | Empty endpoint, `Transport.Direct` with a server that isn't on this machine, or a bad SOCKS URL. |
+| `InvalidArgument` | Empty endpoint, `Transport.Direct` with a server that isn't on this machine, a clearnet endpoint that isn't `https://` (see the endpoint rules below), or a bad SOCKS URL. |
 | `Network` | Tor not running, server unreachable, timeout (180 s). Retry later. |
 | `Server` | The server answered with an error (rare here). |
 | `Unsupported` | The server's API isn't `1.x`, or this SDK is older than `min_client_version`. Update the SDK. |
 | `Verification` | The server's key doesn't match `expectedServerPubkey`, or isn't a valid point. **Don't proceed**; this is the "wrong server" alarm. |
 | `Storage` | `dataDir` can't be created, or the store file is unreadable or from a newer SDK. |
+
+**Endpoint rules.** `connect` refuses, before sending anything, any combination that would expose the user's IP address or the contents of their requests:
+
+| Endpoint | `Direct` | `Tor` or `Custom` |
+|---|---|---|
+| This machine (`localhost`, `127.x.x.x`, `::1`) | allowed | allowed |
+| A `.onion` | refused | allowed, `http://` or `https://` |
+| Anything else (clearnet) | refused | **`https://` only** |
+
+Over clearnet, a request leaves Tor at an exit relay run by a stranger. Tor hides *who* is asking; HTTPS hides *what* is asked from that relay. A clearnet endpoint needs both. A `.onion` needs only Tor, because Tor encrypts all the way to the onion service.
 
 **What the server sees.** One `GET /v1/meta` over Tor.
 
@@ -338,11 +348,54 @@ fun forgetCachedGrades()
 
 ---
 
+## Custom transport: `PerseverusTransport`
+
+For wallets that bring their own network stack, typically their own Tor client. With `Transport.Custom(myTransport)`, the SDK never opens a network connection itself: every request is handed to `myTransport.send`, and your code sends it.
+
+```kotlin
+interface PerseverusTransport {
+    @Throws(TransportException::class)
+    fun send(request: TransportRequest): TransportResponse
+}
+```
+
+Each request has a **circuit tag**, `request.circuit`, such as `"query-6ddaa4d801a18170"` or `"spend-367a18e1294dc3f0"`. There is one rule:
+
+> **Requests with different tags must travel over different Tor circuits.** Requests with the same tag may share one.
+
+That is what keeps the server from linking activities by exit address. For example, it must not see one exit IP downloading the filters for some blocks and then spending a token. The tags the SDK uses:
+
+| Tag | Requests | How long it lives |
+|---|---|---|
+| `query-…` | `/v1/meta`, filter downloads, the codebook | One per `Perseverus` instance |
+| `purchase-…` | `buyTokens` and the `purchaseStatus` polls for that purchase | One per purchase |
+| `issuance-…` | `redeem` | New for every `redeem` |
+| `board-…` | Each card pack's board publish | New for every publish |
+| `spend-…` | The revocation list and the token spends of one `analyzeInputs` | New for every analysis |
+
+The text before the `-` is only for your logs; treat the whole tag as an opaque name. With a Tor SOCKS proxy, the simplest correct implementation uses the tag as the SOCKS username: Tor puts streams with different usernames on different circuits (`IsolateSOCKSAuth`, on by default). The Kotlin sample's [`SocksTransport.kt`](../sdk/examples/kotlin-jvm/src/main/kotlin/com/btcmedusa/sample/SocksTransport.kt) does exactly that.
+
+**What `send` must do**
+
+- Send the request through Tor. **Never fall back to a direct connection**: that would show the server the user's IP address. If Tor isn't ready, throw `TransportException.Failed`.
+- Send `method`, `url`, `headers` and `body` as given. For an `https://` URL, verify the server's certificate as usual.
+- Return the response for **every** HTTP status, including 4xx and 5xx; the SDK reads the server's error message from the body. Throw `TransportException.Failed(reason)` only when no response arrived (connection failed, circuit failed, timeout). The SDK reports that as `PerseverusException.Network`.
+- Respect `timeoutMs` (0 means your own default).
+
+`send` is called on the thread that called the SDK method. The SDK is blocking, so `send` may block too: `runBlocking { … }` inside it is fine. The SDK may call `send` from several threads at once. An unexpected exception thrown from `send` doesn't crash the SDK; it also becomes `PerseverusException.Network`.
+
+---
+
 ## Types
 
 | Type | Kind | Values / fields |
 |---|---|---|
-| `Transport` | sealed class | `Tor(socksProxy: String?)`, `Direct` |
+| `Transport` | sealed class | `Tor(socksProxy: String?)`, `Direct`, `Custom(transport: PerseverusTransport)` |
+| `PerseverusTransport` | interface | `send(request: TransportRequest): TransportResponse`. See [Custom transport](#custom-transport-perseverustransport). |
+| `TransportRequest` | data class | `method`, `url`, `headers: List<Header>`, `body: ByteArray`, `circuit: String`, `timeoutMs: ULong` |
+| `TransportResponse` | data class | `status: UShort`, `headers: List<Header>`, `body: ByteArray` |
+| `Header` | data class | `name`, `value` |
+| `TransportException` | sealed class | `Failed(reason: String)`: throw it from `send` when no response arrived |
 | `PayMethod` | enum | `LIGHTNING`, `CARD` |
 | `Plan` | enum | `TRIAL`, `ONETIME`, `MONTHLY`, `YEARLY`, `DEV` (test servers only) |
 | `PurchaseState` | enum | `PENDING`, `PAID`, `REDEEMED`, `EXPIRED` |

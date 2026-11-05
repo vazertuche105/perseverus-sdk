@@ -24,7 +24,7 @@ This is checked, not just stated. An end-to-end test records every byte a wallet
 
 The SDK also enforces the two settings that could weaken this:
 
-- **Tor only.** `connect` refuses `Transport.Direct` for any server not on your own machine, so the server never sees your IP address.
+- **Tor only.** `connect` refuses `Transport.Direct` for any server not on your own machine, so the server never sees your IP address. A clearnet endpoint must also be `https://`, so the Tor exit relay can't read the requests.
 - **At least 4 decoys** per real block (8 recommended). Fewer is refused before anything is sent.
 
 One choice is still yours: **prefer Lightning over card** if you'd rather your identity weren't attached even to the purchase. A card payment tells Stripe and the server who bought tokens, though never what they checked.
@@ -35,7 +35,7 @@ One choice is still yours: **prefer Lightning over card** if you'd rather your i
 |---|---|---|
 | **Medusa server** | <ul><li>That some Tor user downloaded filters for a set of block heights (real ones mixed with decoys).</li><li>That some Tor user spent *k* valid tokens at a given time.</li><li>That a payment was made for a plan.</li></ul> | <ul><li>Which heights were real (beyond the decoy limits in Known limitations, item 3).</li><li>Any txid, outpoint, address, amount or result.</li><li>The user's IP (Tor).</li><li>The user's balance.</li><li>Which payment or pack a spend came from (given an honestly built `pk.bin`; see Known limitations, item 1).</li></ul> |
 | **Network observer** (ISP, Wi-Fi) | That the device uses Tor. | Anything about Medusa traffic. |
-| **Tor exit / relays** | Nothing. The server is an onion service, so traffic never leaves Tor. | |
+| **Tor exit / relays** | With the `.onion` endpoint: nothing, because traffic never leaves Tor. With a clearnet `https://` endpoint: the exit relay sees that someone connects to the Medusa server, and when. | With the clearnet endpoint, the contents of any request (HTTPS), and the user's IP (Tor). |
 | **Lightning payment path** | A payment of the invoice amount to the server's node. | What it's for, beyond the invoice description. |
 | **Stripe (card payments)** | Card holder identity, IP, amount, and that the purchase was from Perseverus. | Anything about tokens or queries. |
 | **Someone with the device's `dataDir`** | The user's unspent tokens. They can spend them. | Past queries; the SDK stores no query history. Reports your app caches are your responsibility. |
@@ -46,10 +46,10 @@ The SDK enforces all of these. Don't work around them.
 
 1. **No transaction identifiers leave the device.** Matching happens locally against downloaded filters. There is no "look up txid X" API, and adding one, even for debugging, would break the product.
 2. **Decoys.** Real block heights are mixed with decoys drawn around them (see Known limitations) and shuffled. Use `decoysPerInput = 8`; the SDK refuses fewer than 4.
-3. **Separate circuits, no heights on spends.** Filter downloads, token spends, redemptions and board publishes each use a different Tor circuit. The spend request carries no heights, so the server can't join a spend to the filter download that preceded it.
+3. **Separate circuits, no heights on spends.** Filter downloads, purchases, token spends, redemptions and board publishes each use a different Tor circuit, so the server can't link them by exit address. A purchase's status polls stay on that purchase's circuit. A wallet using its own transport (`Transport.Custom`) gets a circuit tag on every request and must keep different tags on different circuits. The spend request carries no heights, so the server can't join a spend to the filter download that preceded it.
 4. **Unlinkable spends.** Tokens are generated on the device, and nothing a spend reveals (the nullifier, the month, the public revocation root) can be computed from what the server saw at purchase: the nullifier is derived under its own domain tag, separate from the token points the server signs.
 5. **Verified server answers.** Every signature and OPRF evaluation comes with a DLEQ proof checked against the pinned server key, so the server can't give a targeted user different results to tag them.
-6. **Fail closed.** `Transport.Tor` never falls back to clearnet, and `Transport.Direct` is refused for any server not on the same machine.
+6. **Fail closed.** `Transport.Tor` never falls back to clearnet, `Transport.Direct` is refused for any server not on the same machine, and a clearnet endpoint without `https://` is refused. With `Transport.Custom` the SDK opens no connections of its own; the wallet's transport must never bypass Tor.
 7. **Proving key in the app.** `pk.bin` ships with the wallet, so a malicious server can't substitute a key.
 
 ## What tokens protect against

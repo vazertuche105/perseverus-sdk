@@ -69,7 +69,7 @@ pub struct PublishResult {
 #[derive(Debug, thiserror::Error)]
 pub enum IssuanceClientError {
     #[error("http error: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[from] crate::net::NetError),
     #[error("server returned {status}: {body}")]
     ServerStatus { status: u16, body: String },
     #[error("hex decode: {0}")]
@@ -235,13 +235,13 @@ struct PublishCommitmentResponseWire {
 
 /// Blocking HTTP client for the `/issue` endpoint.
 ///
-/// Cheap to clone (`reqwest::blocking::Client` is an `Arc` inside).
+/// Cheap to clone (the HTTP client is an `Arc` inside).
 /// Prefer reusing one instance per wallet session to avoid reopening
 /// TCP connections for every pack.
 #[derive(Debug, Clone)]
 pub struct IssuanceClient {
     base_url: String,
-    http: reqwest::blocking::Client,
+    http: crate::net::Http,
     poseidon: PoseidonConfig<PoseidonField>,
     server_pubkey: G1Projective,
     /// "" for the legacy routes (Sparrow), "/v1" for the versioned API.
@@ -275,10 +275,7 @@ impl IssuanceClient {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             // 30s is generous for a ~256-token batch on a laptop-class
             // server; large deployments can override via `with_timeout`.
-            http: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("default blocking client must build"),
+            http: crate::net::Http::builtin_default(Duration::from_secs(30)),
             poseidon: perseverus_core::poseidon::poseidon_config(),
             server_pubkey,
             api_prefix: "",
@@ -286,10 +283,10 @@ impl IssuanceClient {
         }
     }
 
-    /// Replace the HTTP client — useful for custom TLS, proxies, or a
-    /// tuned timeout.
-    pub fn with_http(mut self, http: reqwest::blocking::Client) -> Self {
-        self.http = http;
+    /// Replace the HTTP client — a `reqwest` client (custom TLS, proxies, a
+    /// tuned timeout) or a wallet's own transport ([`crate::net::Http`]).
+    pub fn with_http(mut self, http: impl Into<crate::net::Http>) -> Self {
+        self.http = http.into();
         self
     }
 
@@ -493,23 +490,32 @@ impl IssuanceClient {
     ) -> Result<PublishResult, IssuanceClientError> {
         let url = format!("{}{}/board/publish", self.base_url, self.api_prefix);
 
-        // Build an isolated client — a different Tor circuit than issue_pack,
-        // so the server can't correlate issuance with board-publish. For a
-        // loopback server there is no Tor and circuit isolation is moot, so use
-        // a direct no-proxy client (a Tor SOCKS proxy can't reach 127.0.0.1).
+        // A wallet-provided transport: a fresh circuit tag for this publish,
+        // so it never shares a Tor circuit with the issuance it follows.
+        if let Some(board_http) = self.http.isolated("board") {
+            let resp = board_http.post(&url).timeout(Duration::from_secs(30)).json(wire).send()?;
+            return Self::publish_result(resp);
+        }
+
+        // Built-in client: an isolated client — a different Tor circuit than
+        // issue_pack, so the server can't correlate issuance with board-publish.
+        // For a loopback server there is no Tor and circuit isolation is moot,
+        // so use a direct no-proxy client (a Tor SOCKS proxy can't reach 127.0.0.1).
         let is_loopback = {
             let l = self.base_url.to_ascii_lowercase();
             l.contains("127.0.0.1") || l.contains("//localhost") || l.contains("[::1]")
         };
-        let isolated_http = if is_loopback {
+        let isolated_http: crate::net::Http = if is_loopback {
             reqwest::blocking::Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(30))
                 .build()
-                .map_err(IssuanceClientError::Http)?
+                .map_err(|e| IssuanceClientError::Http(e.into()))?
+                .into()
         } else {
             crate::transport::build_isolated_client(Duration::from_secs(30))
                 .map_err(|e| IssuanceClientError::Transport(e))?
+                .into()
         };
 
         // Try the isolated client first. If the request can't be sent (e.g. the
@@ -523,6 +529,10 @@ impl IssuanceClient {
             }
             Err(e) => return Err(e.into()),
         };
+        Self::publish_result(resp)
+    }
+
+    fn publish_result(resp: crate::net::Response) -> Result<PublishResult, IssuanceClientError> {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().unwrap_or_default();

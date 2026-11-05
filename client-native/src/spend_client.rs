@@ -70,7 +70,7 @@ pub fn last_batch_proof_timings_ms() -> Vec<u64> {
 #[derive(Debug, thiserror::Error)]
 pub enum SpendClientError {
     #[error("http error: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[from] crate::net::NetError),
     #[error("server returned {status}: {body}")]
     ServerStatus { status: u16, body: String },
     #[error("hex decode: {0}")]
@@ -166,7 +166,7 @@ struct BatchOprfEntryWire {
 #[derive(Clone)]
 pub struct SpendClient {
     base_url: String,
-    http: reqwest::blocking::Client,
+    http: crate::net::Http,
     poseidon: PoseidonConfig<PoseidonField>,
     pk: ProvingKey<Bn254>,
     server_pubkey_g1: G1Projective,
@@ -192,10 +192,7 @@ impl SpendClient {
     ) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
-            http: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .expect("default blocking client must build"),
+            http: crate::net::Http::builtin_default(Duration::from_secs(60)),
             poseidon: perseverus_core::poseidon::poseidon_config(),
             pk,
             server_pubkey_g1,
@@ -210,9 +207,10 @@ impl SpendClient {
         self
     }
 
-    /// Replace the HTTP client.
-    pub fn with_http(mut self, http: reqwest::blocking::Client) -> Self {
-        self.http = http;
+    /// Replace the HTTP client: a `reqwest` client or a wallet's own
+    /// transport ([`crate::net::Http`]).
+    pub fn with_http(mut self, http: impl Into<crate::net::Http>) -> Self {
+        self.http = http.into();
         self
     }
 
@@ -225,7 +223,7 @@ impl SpendClient {
     /// Fetch and deserialize the server's Groth16 proving key.
     pub fn fetch_proving_key(
         base_url: &str,
-        http: &reqwest::blocking::Client,
+        http: &crate::net::Http,
     ) -> Result<ProvingKey<Bn254>, SpendClientError> {
         let url = format!("{}/circuit/pk", base_url.trim_end_matches('/'));
         let resp = http.get(&url).send()?;
@@ -243,7 +241,7 @@ impl SpendClient {
     /// server and write it to the cache path for next time.
     pub fn fetch_proving_key_cached(
         base_url: &str,
-        http: &reqwest::blocking::Client,
+        http: &crate::net::Http,
         cache_path: &std::path::Path,
     ) -> Result<ProvingKey<Bn254>, SpendClientError> {
         if cache_path.exists() {
@@ -288,7 +286,7 @@ impl SpendClient {
     /// Fetch and deserialize the server's Groth16 verifying key.
     pub fn fetch_verifying_key(
         base_url: &str,
-        http: &reqwest::blocking::Client,
+        http: &crate::net::Http,
     ) -> Result<ark_groth16::VerifyingKey<Bn254>, SpendClientError> {
         let url = format!("{}/circuit/vk", base_url.trim_end_matches('/'));
         let resp = http.get(&url).send()?;
@@ -308,10 +306,7 @@ impl SpendClient {
         server_pubkey_g1: G1Projective,
     ) -> Result<Self, SpendClientError> {
         let base_url = base_url.into().trim_end_matches('/').to_string();
-        let http = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()
-            .expect("default blocking client must build");
+        let http = crate::net::Http::builtin_default(Duration::from_secs(120));
         let pk = Self::fetch_proving_key(&base_url, &http)?;
 
         Ok(Self {
@@ -329,9 +324,10 @@ impl SpendClient {
     pub fn bootstrap_with_http(
         base_url: impl Into<String>,
         server_pubkey_g1: G1Projective,
-        http: reqwest::blocking::Client,
+        http: impl Into<crate::net::Http>,
     ) -> Result<Self, SpendClientError> {
         let base_url = base_url.into().trim_end_matches('/').to_string();
+        let http = http.into();
         let pk = Self::fetch_proving_key(&base_url, &http)?;
 
         Ok(Self {
@@ -348,10 +344,11 @@ impl SpendClient {
     pub fn bootstrap_with_cache(
         base_url: impl Into<String>,
         server_pubkey_g1: G1Projective,
-        http: reqwest::blocking::Client,
+        http: impl Into<crate::net::Http>,
         cache_path: &std::path::Path,
     ) -> Result<Self, SpendClientError> {
         let base_url = base_url.into().trim_end_matches('/').to_string();
+        let http = http.into();
         let pk = Self::fetch_proving_key_cached(&base_url, &http, cache_path)?;
 
         Ok(Self {

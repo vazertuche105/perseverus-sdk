@@ -67,7 +67,7 @@ pub fn prefetch_progress() -> (u64, u64) {
 #[derive(Debug, Error)]
 pub enum QueryClientError {
     #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[from] crate::net::NetError),
 
     #[error("server error ({status}): {body}")]
     ServerStatus { status: u16, body: String },
@@ -141,7 +141,7 @@ struct ExistsResponse {
 /// pubkey is fetched lazily on the first query so the caller doesn't
 /// have to know it up front.
 pub struct QueryClient {
-    http: reqwest::blocking::Client,
+    http: crate::net::Http,
     base_url: String,
     /// "" for the legacy routes (Sparrow), "/v1" for the versioned API.
     api_prefix: &'static str,
@@ -175,13 +175,13 @@ impl QueryClient {
         } else {
             reqwest::blocking::Client::new()
         };
-        Self { http, base_url, api_prefix: "" }
+        Self { http: http.into(), base_url, api_prefix: "" }
     }
 
-    /// Replace the HTTP client — useful for routing through a Tor
-    /// SOCKS5 proxy or injecting a custom timeout / TLS config.
-    pub fn with_http(mut self, http: reqwest::blocking::Client) -> Self {
-        self.http = http;
+    /// Replace the HTTP client — a `reqwest` client (e.g. through a Tor
+    /// SOCKS5 proxy) or a wallet's own transport ([`crate::net::Http`]).
+    pub fn with_http(mut self, http: impl Into<crate::net::Http>) -> Self {
+        self.http = http.into();
         self
     }
 

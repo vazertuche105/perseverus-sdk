@@ -368,6 +368,18 @@ pub fn http_post_isolated(url: &str, json_body: &str) -> Result<String, String> 
 /// In non-Tor modes (Direct, OHTTP) this falls back to a plain
 /// `build_client` call — circuit isolation is a Tor-specific concept.
 pub fn build_isolated_client(timeout: Duration) -> Result<Client, String> {
+    build_tagged_client(&format!("medusa-{:016x}", rand::random::<u64>()), timeout)
+}
+
+/// Like [`build_isolated_client`], but the circuit is named by `tag`: clients
+/// built with the same tag share a Tor circuit, clients with different tags
+/// don't. Lets one activity (e.g. a purchase and its status checks) stay on
+/// one circuit while every other activity uses a different one. `tag` must be
+/// URL-safe (letters, digits, '-', '_').
+pub fn build_tagged_client(tag: &str, timeout: Duration) -> Result<Client, String> {
+    if tag.is_empty() || !tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return Err(format!("invalid circuit tag {tag:?}"));
+    }
     let mode = state()
         .read()
         .map_err(|e| format!("transport lock poisoned: {}", e))?;
@@ -381,11 +393,10 @@ pub fn build_isolated_client(timeout: Duration) -> Result<Client, String> {
 
     match socks_url {
         Some(socks_url) => {
-            // Generate random credentials for IsolateSOCKSAuth.
-            // Tor treats each unique (user, pass) pair as a stream-isolation
-            // hint and routes them through different circuits.
-            let random_user: u64 = rand::random();
-            let isolation_user = format!("medusa-{:016x}", random_user);
+            // Credentials for IsolateSOCKSAuth: Tor treats each unique
+            // (user, pass) pair as a stream-isolation hint and routes them
+            // through different circuits.
+            let isolation_user = tag;
             let isolation_pass = "x"; // password content doesn't matter
 
             // Insert credentials into the SOCKS URL.

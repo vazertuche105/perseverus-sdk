@@ -373,7 +373,7 @@ That is what keeps the server from linking activities by exit address. For examp
 | `board-…` | Each card pack's board publish | New for every publish |
 | `spend-…` | The revocation list and the token spends of one `analyzeInputs` | New for every analysis |
 
-The text before the `-` is only for your logs; treat the whole tag as an opaque name. With a Tor SOCKS proxy, the simplest correct implementation uses the tag as the SOCKS username: Tor puts streams with different usernames on different circuits (`IsolateSOCKSAuth`, on by default). The Kotlin sample's [`SocksTransport.kt`](../sdk/examples/kotlin-jvm/src/main/kotlin/com/btcmedusa/sample/SocksTransport.kt) does exactly that.
+The text before the `-` is only for your logs; treat the whole tag as an opaque name. Tags can change: if the server's clearnet endpoint refuses a request with `403 tor_required` (the exit relay is too new to be on the Tor Project's exit list yet), the SDK retries it up to twice, each time under a new tag of the same kind, and keeps using the tag that worked. So a new tag always means "a new circuit, please". With a Tor SOCKS proxy, the simplest correct implementation uses the tag as the SOCKS username: Tor puts streams with different usernames on different circuits (`IsolateSOCKSAuth`, on by default). The Kotlin sample's [`SocksTransport.kt`](../sdk/examples/kotlin-jvm/src/main/kotlin/com/btcmedusa/sample/SocksTransport.kt) does exactly that.
 
 **What `send` must do**
 

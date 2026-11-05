@@ -287,12 +287,15 @@ impl Perseverus {
         // card, the payer) must not be linkable to the filters this wallet
         // downloads. Status polls for this purchase reuse the same circuit.
         let tag = self.net.new_purchase_tag();
-        let p: V1Purchase = self.net.post_json(
-            Circuit::Named(&tag),
+        let http = self.net.http(Circuit::Named(&tag))?;
+        let p: V1Purchase = self.net.post_json_with(
+            &http,
             "/v1/tokens/purchase",
             &serde_json::json!({ "method": method_str(method), "plan": plan_str(plan) }),
         )?;
-        self.net.remember_purchase(&p.purchase_id, tag);
+        // The circuit the purchase finally went over (a custom transport may
+        // have moved to a new one after `tor_required`).
+        self.net.remember_purchase(&p.purchase_id, http.circuit().unwrap_or(tag));
         let payment_request = match p.payment.kind.as_str() {
             "lightning" => p.payment.bolt11,
             _ => p.payment.checkout_url,
@@ -354,8 +357,11 @@ impl Perseverus {
         struct S {
             state: String,
         }
-        let tag = self.net.purchase_tag(&purchase_id);
-        let s: S = self.net.get_json(Circuit::Named(&tag), &format!("/v1/tokens/purchase/{purchase_id}/status"))?;
+        let http = self.net.http(Circuit::Named(&self.net.purchase_tag(&purchase_id)))?;
+        let s: S = self.net.get_json_with(&http, &format!("/v1/tokens/purchase/{purchase_id}/status"))?;
+        if let Some(c) = http.circuit() {
+            self.net.remember_purchase(&purchase_id, c);
+        }
         Ok(match s.state.as_str() {
             "paid" => PurchaseState::Paid,
             "redeemed" => PurchaseState::Redeemed,

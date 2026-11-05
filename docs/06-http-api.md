@@ -8,12 +8,12 @@ Responses on this page come from the server's own test suite, which records real
 
 | | |
 |---|---|
-| Base URL | `http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion` over Tor (`socks5h`). Always connect over Tor: anything else shows the server your IP address. |
+| Base URL | `http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion` over Tor (`socks5h`). Always connect over Tor: anything else shows the server your IP address. A clearnet `https://` address, for Tor clients that can't reach onion services, is being set up. It accepts connections from Tor exit relays only, and refuses everything else with `403 tor_required`. |
 | Format | JSON, `snake_case`. Binary values are lowercase hex. Curve points are compressed Baby Jubjub (32 bytes). Field elements are BN254 Fr, little-endian (32 bytes). Months are `YYYYMM` integers. |
 | Auth | None. Tokens and purchase ids are the only credentials, and they travel in request bodies. |
 | Idempotency | `Idempotency-Key` header (1–128 chars) on `tokens/purchase`, `tokens/redeem` and `analyze/batch`. The same key and body within 24 h replays the stored response with header `Idempotent-Replayed: true`. The same key with a different body is refused with `422 idempotency_key_reused`. 5xx responses aren't stored. Keys are held in memory, so a server restart forgets them. |
 | Caching | `codebook`, `circuit/pk` and `circuit/vk` send `ETag`. Send `If-None-Match` to get `304`. |
-| Privacy rule | **No endpoint takes a txid, outpoint or address, and none ever will.** `filters/batch` and `analyze/batch` must go over different Tor circuits, and the analyze request carries no heights. |
+| Privacy rule | **No endpoint takes a txid, outpoint or address, and none ever will.** `filters/batch` and `analyze/batch` must go over different Tor circuits, and the analyze request carries no heights. Purchases (`tokens/purchase` and its `status` polls) go over their own circuit too. |
 
 ## The error envelope
 
@@ -39,6 +39,7 @@ Branch on `code`. `message` is for logs and may change. `retryable: true` means 
 | `proof_invalid` | 403 | The spend proof didn't verify (analyze). | no |
 | `revocation_root_mismatch` | 403 | The proof used an old revocation root; refetch it and re-prove. | no |
 | `ticket_invalid` | 403 | Board publish without a valid one-time ticket from the card redemption. | no |
+| `tor_required` | 403 | Clearnet endpoint only: the request didn't come from a Tor exit relay on the Tor Project's exit list. Send it through Tor. A brand-new exit relay can take up to about an hour to appear on the list, so if the request did go through Tor, retry over a different circuit. | **yes** (over another circuit) |
 | `forbidden` | 403 | Other refusal. | no |
 | `not_found` | 404 | Unknown route, purchase (or card purchase already redeemed), codebook or key. | no |
 | `nullifier_spent` | 409 | This token was already spent (analyze). | no |
@@ -49,6 +50,7 @@ Branch on `code`. `message` is for logs and may change. `retryable: true` means 
 | `not_implemented` | 501 | Not offered through this endpoint (e.g. `method: btc` purchases). | no |
 | `upstream_unavailable` | 502/503/504 | The price feed or payment processor is unreachable. | **yes** |
 | `not_configured` | 503 | That payment method is disabled on this server. | no |
+| `tor_exit_list_unavailable` | 503 | Clearnet endpoint only: the server hasn't loaded the Tor exit list yet (just after a restart). | **yes** |
 | `internal` | 500 | A server bug. | **yes** |
 
 New codes may be added; treat unknown ones like `internal`.

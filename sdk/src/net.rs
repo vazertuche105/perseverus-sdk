@@ -131,14 +131,16 @@ pub(crate) enum Circuit<'a> {
 
 enum Kind {
     Builtin,
-    Custom(Arc<dyn ExternalTransport>),
+    /// `query` is the one client for the query circuit, shared by every
+    /// query request, so a circuit replaced after `tor_required` stays
+    /// replaced for all of them.
+    Custom { transport: Arc<dyn ExternalTransport>, query: Http },
 }
 
 /// The SDK's way to the server.
 pub(crate) struct Net {
     base_url: String,
     kind: Kind,
-    query_tag: String,
     /// Circuit tag per purchase_id, so a purchase's status polls stay on the
     /// circuit it was bought on and off every other one.
     purchase_tags: Mutex<HashMap<String, String>>,
@@ -151,14 +153,15 @@ impl Net {
     }
 
     pub(crate) fn custom(base_url: &str, t: Arc<dyn PerseverusTransport>, timeout: Duration) -> Self {
-        Self::new(base_url, Kind::Custom(Arc::new(Adapter(t))), timeout)
+        let transport: Arc<dyn ExternalTransport> = Arc::new(Adapter(t));
+        let query = Http::external(transport.clone(), new_circuit_tag("query"), timeout);
+        Self::new(base_url, Kind::Custom { transport, query }, timeout)
     }
 
     fn new(base_url: &str, kind: Kind, timeout: Duration) -> Self {
         Net {
             base_url: base_url.to_string(),
             kind,
-            query_tag: new_circuit_tag("query"),
             purchase_tags: Mutex::new(HashMap::new()),
             timeout,
         }
@@ -167,14 +170,11 @@ impl Net {
     /// An HTTP client whose requests all travel over `circuit`.
     pub(crate) fn http(&self, circuit: Circuit<'_>) -> Result<Http, PerseverusError> {
         match &self.kind {
-            Kind::Custom(t) => {
-                let tag = match circuit {
-                    Circuit::Query => self.query_tag.clone(),
-                    Circuit::Fresh(purpose) => new_circuit_tag(purpose),
-                    Circuit::Named(tag) => tag.to_string(),
-                };
-                Ok(Http::external(t.clone(), tag, self.timeout))
-            }
+            Kind::Custom { transport, query } => Ok(match circuit {
+                Circuit::Query => query.clone(),
+                Circuit::Fresh(purpose) => Http::external(transport.clone(), new_circuit_tag(purpose), self.timeout),
+                Circuit::Named(tag) => Http::external(transport.clone(), tag.to_string(), self.timeout),
+            }),
             Kind::Builtin => {
                 if crate::is_loopback_endpoint(&self.base_url) {
                     // Tor refuses to connect to 127.0.0.1, and there is no
@@ -223,18 +223,20 @@ impl Net {
     }
 
     pub(crate) fn get_json<T: serde::de::DeserializeOwned>(&self, circuit: Circuit<'_>, path: &str) -> Result<T, PerseverusError> {
-        let resp = self.http(circuit)?.get(format!("{}{path}", self.base_url)).send()?;
-        json_or_error(resp)
+        self.get_json_with(&self.http(circuit)?, path)
     }
 
-    pub(crate) fn post_json<T: serde::de::DeserializeOwned>(
+    pub(crate) fn get_json_with<T: serde::de::DeserializeOwned>(&self, http: &Http, path: &str) -> Result<T, PerseverusError> {
+        json_or_error(http.get(format!("{}{path}", self.base_url)).send()?)
+    }
+
+    pub(crate) fn post_json_with<T: serde::de::DeserializeOwned>(
         &self,
-        circuit: Circuit<'_>,
+        http: &Http,
         path: &str,
         body: &serde_json::Value,
     ) -> Result<T, PerseverusError> {
-        let resp = self.http(circuit)?.post(format!("{}{path}", self.base_url)).json(body).send()?;
-        json_or_error(resp)
+        json_or_error(http.post(format!("{}{path}", self.base_url)).json(body).send()?)
     }
 }
 

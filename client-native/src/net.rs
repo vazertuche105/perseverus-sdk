@@ -53,6 +53,24 @@ pub trait ExternalTransport: Send + Sync {
     fn send(&self, request: ExternalRequest) -> Result<ExternalResponse, String>;
 }
 
+/// How many times a request refused with `403 tor_required` is retried on a
+/// new circuit. The server's clearnet endpoint refuses connections from exit
+/// relays that aren't on the Tor Project's exit list yet (new relays can take
+/// about an hour to appear); the refusal happens before the server acts on
+/// the request, so retrying is always safe.
+pub const TOR_REQUIRED_RETRIES: u32 = 2;
+
+fn is_tor_required(status: StatusCode, body: &[u8]) -> bool {
+    status == StatusCode::FORBIDDEN
+        && serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .is_some_and(|v| v["error"]["code"] == "tor_required")
+}
+
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A random circuit tag for `purpose` ("query", "spend", "issuance", …).
 pub fn new_circuit_tag(purpose: &str) -> String {
     format!("{purpose}-{:016x}", rand::random::<u64>())
@@ -61,7 +79,9 @@ pub fn new_circuit_tag(purpose: &str) -> String {
 #[derive(Clone)]
 enum Kind {
     Builtin(reqwest::blocking::Client),
-    External { transport: Arc<dyn ExternalTransport>, circuit: String },
+    /// `circuit` is shared by clones, so when a circuit is replaced (see
+    /// [`TOR_REQUIRED_RETRIES`]) every clone moves to the new one.
+    External { transport: Arc<dyn ExternalTransport>, circuit: Arc<std::sync::Mutex<String>> },
 }
 
 /// Sends HTTP requests over the built-in client or a wallet's transport.
@@ -76,7 +96,7 @@ impl fmt::Debug for Http {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             Kind::Builtin(_) => f.write_str("Http(builtin)"),
-            Kind::External { circuit, .. } => write!(f, "Http(external, circuit {circuit})"),
+            Kind::External { circuit, .. } => write!(f, "Http(external, circuit {})", lock(circuit)),
         }
     }
 }
@@ -111,7 +131,10 @@ impl Http {
 
     /// Requests go through `transport`, all on circuit `circuit`.
     pub fn external(transport: Arc<dyn ExternalTransport>, circuit: impl Into<String>, default_timeout: Duration) -> Self {
-        Http { kind: Kind::External { transport, circuit: circuit.into() }, default_timeout: Some(default_timeout) }
+        Http {
+            kind: Kind::External { transport, circuit: Arc::new(std::sync::Mutex::new(circuit.into())) },
+            default_timeout: Some(default_timeout),
+        }
     }
 
     /// True if requests go through a wallet-provided transport.
@@ -125,17 +148,20 @@ impl Http {
     pub fn isolated(&self, purpose: &str) -> Option<Http> {
         match &self.kind {
             Kind::External { transport, .. } => Some(Http {
-                kind: Kind::External { transport: transport.clone(), circuit: new_circuit_tag(purpose) },
+                kind: Kind::External {
+                    transport: transport.clone(),
+                    circuit: Arc::new(std::sync::Mutex::new(new_circuit_tag(purpose))),
+                },
                 default_timeout: self.default_timeout,
             }),
             Kind::Builtin(_) => None,
         }
     }
 
-    /// The circuit tag, for an external transport.
-    pub fn circuit(&self) -> Option<&str> {
+    /// The current circuit tag, for an external transport.
+    pub fn circuit(&self) -> Option<String> {
         match &self.kind {
-            Kind::External { circuit, .. } => Some(circuit),
+            Kind::External { circuit, .. } => Some(lock(circuit).clone()),
             Kind::Builtin(_) => None,
         }
     }
@@ -216,18 +242,34 @@ impl RequestBuilder {
                 Ok(Response { inner: Inner::Builtin(rb.send()?) })
             }
             Kind::External { transport, circuit } => {
-                let req = ExternalRequest {
-                    method: self.method.to_string(),
-                    url: self.url,
-                    headers: self.headers,
-                    body: self.body,
-                    circuit: circuit.clone(),
-                    timeout_ms: self.timeout.map(|t| t.as_millis() as u64).unwrap_or(0),
-                };
-                let r = transport.send(req).map_err(NetError::Transport)?;
-                let status = StatusCode::from_u16(r.status)
-                    .map_err(|_| NetError::Transport(format!("transport returned invalid HTTP status {}", r.status)))?;
-                Ok(Response { inner: Inner::External { status, body: std::io::Cursor::new(r.body) } })
+                let mut attempt = 0;
+                loop {
+                    let tag = lock(circuit).clone();
+                    let req = ExternalRequest {
+                        method: self.method.to_string(),
+                        url: self.url.clone(),
+                        headers: self.headers.clone(),
+                        body: self.body.clone(),
+                        circuit: tag.clone(),
+                        timeout_ms: self.timeout.map(|t| t.as_millis() as u64).unwrap_or(0),
+                    };
+                    let r = transport.send(req).map_err(NetError::Transport)?;
+                    let status = StatusCode::from_u16(r.status)
+                        .map_err(|_| NetError::Transport(format!("transport returned invalid HTTP status {}", r.status)))?;
+                    if attempt < TOR_REQUIRED_RETRIES && is_tor_required(status, &r.body) {
+                        // The exit relay isn't on the server's list yet. Move
+                        // this activity to a new circuit (unless another
+                        // request already did) and try again there.
+                        let mut c = lock(circuit);
+                        if *c == tag {
+                            *c = new_circuit_tag(tag.split('-').next().unwrap_or("circuit"));
+                        }
+                        drop(c);
+                        attempt += 1;
+                        continue;
+                    }
+                    return Ok(Response { inner: Inner::External { status, body: std::io::Cursor::new(r.body) } });
+                }
             }
         }
     }
@@ -389,6 +431,51 @@ mod tests {
         assert_eq!(seen[1].method, "GET");
         assert_ne!(seen[1].circuit, "query-1");
         assert_eq!(seen[1].timeout_ms, 1500);
+    }
+
+    /// Refuses with tor_required until the circuit changes `n` times.
+    struct NewExits {
+        seen: Mutex<Vec<String>>,
+        refuse_first: usize,
+    }
+
+    impl ExternalTransport for NewExits {
+        fn send(&self, r: ExternalRequest) -> Result<ExternalResponse, String> {
+            let mut seen = self.seen.lock().unwrap();
+            seen.push(r.circuit.clone());
+            let distinct = seen.iter().collect::<std::collections::HashSet<_>>().len();
+            if distinct <= self.refuse_first {
+                let body = br#"{"error":{"code":"tor_required","message":"x","retryable":true}}"#.to_vec();
+                return Ok(ExternalResponse { status: 403, headers: vec![], body });
+            }
+            Ok(ExternalResponse { status: 200, headers: vec![], body: b"{}".to_vec() })
+        }
+    }
+
+    #[test]
+    fn tor_required_moves_the_activity_to_a_new_circuit() {
+        let t = Arc::new(NewExits { seen: Mutex::new(vec![]), refuse_first: 2 });
+        let http = Http::external(t.clone(), "query-aaaa", Duration::from_secs(1));
+        let clone = http.clone();
+        assert_eq!(http.post("http://x/v1/filters/batch").json(&1).send().unwrap().status().as_u16(), 200);
+        let seen = t.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 3, "two refusals, then success: {seen:?}");
+        assert_eq!(seen[0], "query-aaaa");
+        assert!(seen[1].starts_with("query-") && seen[2].starts_with("query-"));
+        assert!(seen[0] != seen[1] && seen[1] != seen[2]);
+        // later requests, from any clone, stay on the circuit that worked
+        clone.get("http://x/v1/meta").send().unwrap();
+        assert_eq!(t.seen.lock().unwrap().last().unwrap(), &seen[2]);
+        assert_eq!(http.circuit().unwrap(), seen[2]);
+    }
+
+    #[test]
+    fn tor_required_retries_are_limited() {
+        let t = Arc::new(NewExits { seen: Mutex::new(vec![]), refuse_first: 100 });
+        let http = Http::external(t.clone(), "spend-1", Duration::from_secs(1));
+        let r = http.get("http://x").send().unwrap();
+        assert_eq!(r.status().as_u16(), 403, "the last refusal is returned");
+        assert_eq!(t.seen.lock().unwrap().len(), 1 + TOR_REQUIRED_RETRIES as usize);
     }
 
     #[test]

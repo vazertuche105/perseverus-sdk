@@ -44,7 +44,7 @@ BTC Medusa tells a wallet how exposed its coins are to chain analysis, using fin
 6. **v11 spend circuit and key rotation** (unlinkable spends). Implemented and tested on the `circuit-v11` branch; ships with a coordinated key rotation. See `docs/07-privacy-model.md`, Upcoming: v11.
 7. **SDK features:** BTC silent-payment purchase, a redeem retry that survives an app restart (persist the prepared blinded packs), a progress callback (`#[uniffi::export(with_foreign)]` trait), and async variants.
 
-**Open questions for BlueWallet:** inputs as a PSBT or as outpoints plus heights (the SDK takes outpoints plus heights today); decoy default and bandwidth budget; which block range must have filters; payment methods at launch; how the SDK is licensed and published.
+**Open questions for BlueWallet:** inputs as a PSBT or as outpoints plus heights (the SDK takes outpoints plus heights today); decoy default and bandwidth budget; which block range must have filters; payment methods at launch; how the SDK is published. (Licensing is settled: MIT, since 2026-11-05.)
 
 ## Rules for contributors
 

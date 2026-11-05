@@ -10,7 +10,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "LicenseRef-Proprietary"  # all rights reserved until the owner picks a license
+license = "MIT"
 authors = ["Valentino Zertuche <z.valentino@gmail.com>"]
 
 [workspace.dependencies]

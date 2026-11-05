@@ -19,4 +19,4 @@ cd sdk/examples/kotlin-jvm && ./gradlew run --args="status"   # needs JDK 17+
 
 Integrating a wallet: read **[`docs/README.md`](docs/README.md)**. Working on the SDK itself: read **`HANDOFF.md`** first.
 
-© Perseverus Privacy Solutions. All rights reserved; patent pending. No license is granted unless the owner states one.
+Licensed under the [MIT License](LICENSE), © 2026 Perseverus Privacy Solutions. That covers everything in this repository: the wallet SDK, the client crates, the circuit and the docs. The BTC Medusa server is a separate product and is not open source. Licenses of the third-party crates the SDK ships with are listed in [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).

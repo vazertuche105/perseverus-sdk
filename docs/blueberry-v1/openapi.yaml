@@ -32,7 +32,8 @@ info:
       `Error` envelope with a stable `code`.
     * `Idempotency-Key` is honoured on purchase, redeem and analyze.
   license:
-    name: All rights reserved
+    name: MIT
+    url: https://opensource.org/licenses/MIT
 servers:
   - url: http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion
     description: Production (Tor hidden service). Route over Tor (socks5h).

@@ -2,6 +2,7 @@
 name = "perseverus-client-native"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [lib]
 # rlib lets us pull the issuance client into integration tests + other

@@ -6,6 +6,8 @@
 //   ./gradlew run --args="buy-trial"                           (pays a real ~$0.25 Lightning invoice)
 //   ./gradlew run --args="buy-dev"                             (100 tokens for a few cents; test servers only)
 //   ./gradlew run --args="analyze <txid>:<vout>:<height> ..."  (pre-broadcast analysis)
+//   MEDUSA_TRANSPORT=custom MEDUSA_ENDPOINT=https://… ./gradlew run --args="check-transport"
+//                                                              (does the Kotlin transport isolate circuits?)
 //
 // Everything goes through Tor by default, so it's safe to try with a wallet
 // that holds real funds. Start Tor first (`brew install tor && tor`, or keep
@@ -37,6 +39,8 @@ import com.btcmedusa.perseverus.PrivacyReport
 import com.btcmedusa.perseverus.PurchaseState
 import com.btcmedusa.perseverus.ReportStatus
 import com.btcmedusa.perseverus.Transport
+import com.btcmedusa.perseverus.TransportVerdict
+import com.btcmedusa.perseverus.checkTransport
 import com.google.gson.JsonParser
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -77,6 +81,15 @@ fun main(args: Array<String>) {
         ?: File(BUNDLED_PK).takeIf { it.exists() }?.canonicalPath
 
     try {
+        if (args.firstOrNull() == "check-transport") {
+            // Needs no wallet: just the transport and the clearnet endpoint.
+            val t = recorder ?: throw IllegalArgumentException("check-transport tests the Kotlin transport: set MEDUSA_TRANSPORT=custom")
+            val r = checkTransport(endpoint, t, args.getOrNull(1)?.toUInt() ?: 8u)
+            for (c in r.results) println("  ${c.circuit}  ${c.exits.joinToString("  ")}")
+            println("\n${r.verdict}: ${r.summary}")
+            if (r.verdict == TransportVerdict.FAIL) exitProcess(1)
+            return
+        }
         val medusa = Perseverus.connect(Config(endpoint = endpoint, dataDir = dataDir, transport = transport, expectedServerPubkey = null, provingKeyPath = provingKey))
         when (args.firstOrNull() ?: "status") {
             "status" -> status(medusa, endpoint, dataDir)
@@ -112,6 +125,7 @@ private fun usage() {
           buy-trial
           buy-dev        (100 tokens for a few cents; only on test servers)
           analyze <txid>:<vout>:<height> [...] [--decoys N] [--tip HEIGHT]
+          check-transport [N]   (with MEDUSA_TRANSPORT=custom and a clearnet https:// MEDUSA_ENDPOINT)
 
         Connects over Tor (start it first). --decoys is at least 4; 8 by default.
         """.trimIndent(),

@@ -384,6 +384,29 @@ The text before the `-` is only for your logs; treat the whole tag as an opaque 
 
 `send` is called on the thread that called the SDK method. The SDK is blocking, so `send` may block too: `runBlocking { … }` inside it is fine. The SDK may call `send` from several threads at once. An unexpected exception thrown from `send` doesn't crash the SDK; it also becomes `PerseverusException.Network`.
 
+### `checkTransport`: test your transport's circuit isolation
+
+```kotlin
+@Throws(PerseverusException::class)
+fun checkTransport(endpoint: String, transport: PerseverusTransport, circuits: UInt): TransportCheck
+```
+
+**What.** Sends two requests under each of `circuits` fresh tags (4 to 32; use 8) to the server's clearnet `https://` endpoint. For each request, `GET /v1/transport/exit` reports which Tor exit relay it arrived from. The function then compares the exits.
+
+**Why.** Isolation is the one thing the SDK can't check by itself: only your Tor client decides which circuit a request uses. Run this before you ship, and whenever you change your Tor layer. A debug screen or an instrumented test is a good place for it.
+
+**Reading the result.** The check is **statistical**. Tor picks exit relays at random, weighted by bandwidth, so two properly separate circuits sometimes pick the same busy exit. One shared exit now and then is normal and still passes. What fails is the pattern of broken isolation: different tags *keep* arriving from the same exit.
+
+| `verdict` | Meaning | What to do |
+|---|---|---|
+| `PASS` | Different tags left through different exits, allowing for up to one chance overlap per 8 tags. | Nothing. |
+| `INCONCLUSIVE` | More overlap than chance usually gives, but not clearly broken. With working isolation this happens about 1 run in 50. | Run it again. If it keeps coming back like this, treat it as a fail. |
+| `FAIL` | All tags used the same exit, most tags shared exits, or the server refused most requests as not coming from Tor. `summary` says which. | Fix the transport before shipping. |
+
+`TransportCheck` also has `circuitsTested`, `distinctExits`, `sharedExits`, `refusedRequests` (requests not seen as coming from a listed Tor exit), `circuitsThatChangedExit` (informational: Tor may rebuild a circuit) and `results`, the exits seen per tag.
+
+**Errors.** `Unsupported` for a `.onion` endpoint: an onion service has no exit relay to compare, so the check needs the clearnet endpoint. `Network` if the transport couldn't send a request. `InvalidArgument` for `circuits` outside 4–32 or a clearnet `http://` endpoint.
+
 ---
 
 ## Types
@@ -396,6 +419,9 @@ The text before the `-` is only for your logs; treat the whole tag as an opaque 
 | `TransportResponse` | data class | `status: UShort`, `headers: List<Header>`, `body: ByteArray` |
 | `Header` | data class | `name`, `value` |
 | `TransportException` | sealed class | `Failed(reason: String)`: throw it from `send` when no response arrived |
+| `TransportCheck` | data class | Result of `checkTransport`: `verdict`, `summary`, counts and `results: List<CircuitExits>` |
+| `TransportVerdict` | enum | `PASS`, `FAIL`, `INCONCLUSIVE` |
+| `CircuitExits` | data class | `circuit`, `exits: List<String>` (an exit address, or `"refused"`, per request) |
 | `PayMethod` | enum | `LIGHTNING`, `CARD` |
 | `Plan` | enum | `TRIAL`, `ONETIME`, `MONTHLY`, `YEARLY`, `DEV` (test servers only) |
 | `PurchaseState` | enum | `PENDING`, `PAID`, `REDEEMED`, `EXPIRED` |

@@ -42,6 +42,7 @@ Branch on `code`. `message` is for logs and may change. `retryable: true` means 
 | `tor_required` | 403 | Clearnet endpoint only: the request didn't come from a Tor exit relay on the Tor Project's exit list. Send it through Tor. A brand-new exit relay can take up to about an hour to appear on the list, so if the request did go through Tor, retry over a different circuit. | **yes** (over another circuit) |
 | `forbidden` | 403 | Other refusal. | no |
 | `not_found` | 404 | Unknown route, purchase (or card purchase already redeemed), codebook or key. | no |
+| `not_available` | 404 | `transport/exit` over the onion service, which has no exit relay. | no |
 | `nullifier_spent` | 409 | This token was already spent (analyze). | no |
 | `credential_used` | 409 | The purchase was already redeemed. | no |
 | `slot_taken` | 409 | The revocation slot for this `pack_id` is in use; pick another id (board). | no |
@@ -74,6 +75,7 @@ New codes may be added; treat unknown ones like `internal`.
 | GET | [`/v1/revocation/proof/{pack_id}`](#get-v1revocationproofpack_id) | Deprecated: server-built proof | none |
 | POST | [`/v1/analyze/batch`](#post-v1analyzebatch) | Spend tokens, get OPRF evaluations | `analyzeInputs` |
 | GET | [`/v1/circuit/pk`](#get-v1circuitpk-and-v1circuitvk), `/v1/circuit/vk` | Groth16 keys | (fallback only) |
+| GET | [`/v1/transport/exit`](#get-v1transportexit) | The Tor exit a request came from (clearnet endpoint only) | `checkTransport` |
 
 ---
 
@@ -346,6 +348,16 @@ Recorded errors for the whole request:
 { "error": { "code": "bad_request", "message": "requests must not be empty", "retryable": false } }
 { "error": { "code": "bad_request", "message": "invalid JSON body: missing field `spend` at line 1 column 35", "retryable": false } }
 ```
+
+## `GET /v1/transport/exit`
+
+Clearnet endpoint only. Returns the Tor exit address the request arrived from, so a wallet can check that requests with different circuit tags leave Tor through different circuits. The SDK's `checkTransport` uses it.
+
+```json
+{ "exit_ip": "185.220.101.1" }
+```
+
+The address is always a Tor exit relay's: requests from anywhere else are refused with `403 tor_required` before they get here. It is never a user's own address, and the server doesn't record it. Over the onion service there is no exit relay, so it answers `404 not_available`.
 
 ## `GET /v1/circuit/pk` and `/v1/circuit/vk`
 

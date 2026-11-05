@@ -25,6 +25,7 @@
 uniffi::setup_scaffolding!();
 
 pub mod analyze;
+pub mod check;
 pub mod error;
 pub mod net;
 pub mod report;
@@ -52,6 +53,7 @@ pub fn min_decoys_per_input() -> u32 {
 }
 pub use error::PerseverusError;
 pub use net::{Header, PerseverusTransport, TransportError, TransportRequest, TransportResponse};
+pub use check::{check_transport, CircuitExits, TransportCheck, TransportVerdict};
 use net::{Circuit, Net};
 pub use report::{Finding, InputRef, PrivacyReport, Recommendation, ReportError, ReportStatus, Severity, SeverityCounts};
 pub use store::PackInfo;
@@ -640,7 +642,7 @@ pub(crate) fn is_loopback_endpoint(endpoint: &str) -> bool {
 ///
 /// Over clearnet the request leaves Tor at an exit relay run by a stranger;
 /// without HTTPS that relay could read every request.
-fn check_endpoint(endpoint: &str, transport: &Transport) -> Result<(), PerseverusError> {
+pub(crate) fn check_endpoint(endpoint: &str, transport: &Transport) -> Result<(), PerseverusError> {
     let bad = |reason: String| Err(PerseverusError::InvalidArgument { reason });
     let Ok(url) = reqwest::Url::parse(endpoint) else { return bad(format!("endpoint {endpoint:?} is not a URL")) };
     if url.scheme() != "http" && url.scheme() != "https" {

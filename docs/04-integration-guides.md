@@ -62,6 +62,8 @@ val medusa = Perseverus.connect(Config(
 
 `MyTorClient` stands for your own client. The rules are in the [SDK reference](03-sdk-reference.md#custom-transport-perseverustransport). The one that matters most: **requests with different `circuit` tags must leave Tor through different circuits**, and nothing may ever bypass Tor. The Kotlin sample includes a complete working transport, [`SocksTransport.kt`](../sdk/examples/kotlin-jvm/src/main/kotlin/com/btcmedusa/sample/SocksTransport.kt): about 100 lines of HTTP/1.1 and TLS over a SOCKS stream. To adapt it, replace its `openTorStream` with your client's "open a stream on the circuit for this tag" call.
 
+Before shipping, check that your transport really isolates circuits, with `checkTransport(endpoint, transport, 8u)` against the clearnet endpoint (see the [SDK reference](03-sdk-reference.md#checktransport-test-your-transports-circuit-isolation)). It's statistical: an occasional shared exit is normal, and the verdict accounts for it. The Kotlin sample runs it with `MEDUSA_TRANSPORT=custom ./gradlew run --args="check-transport"`.
+
 If your Tor client can't reach onion services, use a clearnet endpoint. It must be `https://`: the request leaves Tor at an exit relay, and HTTPS keeps that relay from reading it. `connect` refuses a clearnet `http://` endpoint. A clearnet HTTPS endpoint for the production server, which accepts connections from Tor exits only, is being set up; this guide will give its address once it's live.
 
 ### `pk.bin`
@@ -318,7 +320,7 @@ Branch on the code (`e.reason.substringBefore(':')` for `Server`, `report.error.
 ## Release checklist
 
 - [ ] `Transport.Tor` or `Transport.Custom` everywhere in release builds (the SDK already refuses `Direct` for anything but localhost).
-- [ ] With `Transport.Custom`: different circuit tags really get different circuits, and nothing falls back to a direct connection when Tor isn't ready.
+- [ ] With `Transport.Custom`: `checkTransport` passes (different circuit tags really get different circuits), and nothing falls back to a direct connection when Tor isn't ready.
 - [ ] `expectedServerPubkey` pinned to `64194625…d695`.
 - [ ] `pk.bin` bundled and its SHA-256 checked.
 - [ ] `dataDir` included in the wallet backup and excluded from cloud sync between devices.

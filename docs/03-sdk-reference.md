@@ -274,11 +274,11 @@ fun analyzeInputs(inputs: List<InputRef>, options: AnalyzeOptions): AnalysisResu
 **How** (details in [How it works](01-how-it-works.md)):
 0. Coins already graded on this device are answered from the SDK's cache in `dataDir`: no request, no token, `tokenSpent = false`. Only the rest go on to the steps below.
 1. Inputs are grouped by funding transaction; one check covers all inputs from the same earlier transaction.
-2. Filters are downloaded for the real block heights mixed with `decoysPerInput` decoys each, shuffled, at most 200 per request, over one Tor circuit.
+2. Filters are downloaded **one real block at a time**: each request carries one real block height mixed with `decoysPerInput` decoys, shuffled, over its own fresh Tor circuit. Coins in the same block share a request. The requests go out in parallel (up to 6 at once), each after a random delay of up to a second.
 3. Each funding transaction is matched **on the device**:
    - Not in its block's filter → `UNGRADED` (free).
    - No filter for that block → `NOT_COVERED` (free).
-4. If anything matched, the SDK checks the balance. It throws `InsufficientTokens` **before spending anything** if there aren't enough tokens. Otherwise it marks one token per matched funding transaction as used, then sends all the spend proofs in **one** request over a **different** Tor circuit. That request contains no heights, txids or outpoints.
+4. If anything matched, the SDK checks the balance. It throws `InsufficientTokens` **before spending anything** if there aren't enough tokens. Otherwise it fetches the public revocation list on its own circuit, marks one token per matched funding transaction as used, and spends each token in a **separate** request, each over its own fresh Tor circuit (also in parallel, with random delays). These requests contain no heights, txids or outpoints.
 5. It verifies the server's DLEQ proofs, decrypts each tag, and builds the reports.
 
 **When.** After the user has built a transaction and before they sign or broadcast it, typically when they open the review screen. Also useful on demand ("check this coin") from a coin-control screen.
@@ -333,7 +333,9 @@ val worst = result.reports.filter { it.status == ReportStatus.GRADED }.minByOrNu
 | `decrypt_failed` | The decrypted value isn't in the codebook. Report it to Perseverus. | Spent |
 | `unsupported_filter_version` | The server sent a filter format this SDK doesn't know. Update the SDK. | Free |
 
-**What the server sees.** A shuffled set of block heights on one circuit, and later, on another circuit, *k* blinded points with token proofs. Never a txid, an outpoint, an address or a balance.
+**What the server sees.** For each coin, on its own circuit, a shuffled set of block heights (one real, the rest decoys), and on yet another circuit, one blinded point with a token proof. Never a txid, an outpoint, an address or a balance.
+
+**Why one coin at a time.** If all of a transaction's coins went in one request, the server could later recognise the broadcast transaction: decoys hide one coin's block well, but a stranger's transaction whose inputs *all* come from blocks in that one set practically never happens. A shared circuit would also let it group the coins a wallet checks in one session. Splitting by coin removes both. Pass all of a transaction's inputs in **one** `analyzeInputs` call anyway: the SDK splits them itself, and a single call lets it share the work (one codebook, one revocation list, coins in the same block share a filter request). The privacy model's [known limitations](07-privacy-model.md#known-limitations) cover what timing can still reveal.
 
 ## `forgetCachedGrades`
 
@@ -363,15 +365,19 @@ Each request has a **circuit tag**, `request.circuit`, such as `"query-6ddaa4d80
 
 > **Requests with different tags must travel over different Tor circuits.** Requests with the same tag may share one.
 
-That is what keeps the server from linking activities by exit address. For example, it must not see one exit IP downloading the filters for some blocks and then spending a token. The tags the SDK uses:
+That is what keeps the server from linking activities by exit address. For example, it must not see one exit IP downloading the filters for some blocks and then spending a token, or two coins' requests leaving through the same exit. The tags the SDK uses:
 
 | Tag | Requests | How long it lives |
 |---|---|---|
-| `query-…` | `/v1/meta`, filter downloads, the codebook | One per `Perseverus` instance |
+| `query-…` | `/v1/meta` and the codebook (public data, the same for everyone) | One per `Perseverus` instance |
 | `purchase-…` | `buyTokens` and the `purchaseStatus` polls for that purchase | One per purchase |
 | `issuance-…` | `redeem` | New for every `redeem` |
 | `board-…` | Each card pack's board publish | New for every publish |
-| `spend-…` | The revocation list and the token spends of one `analyzeInputs` | New for every analysis |
+| `filters-…` | One coin's filter request (one real block plus its decoys) | New for every block, in every analysis |
+| `revocation-…` | The public revocation list, fetched before spending | New for every analysis |
+| `spend-…` | One token's spend | New for every coin |
+
+So one `analyzeInputs` call with 20 coins from 20 different blocks uses about 41 circuits: 20 `filters-…`, 1 `revocation-…`, 20 `spend-…`. Up to 6 requests are in flight at once, so `send` will be called from several threads together. Build each new circuit on demand; Tor builds them in parallel, so 20 coins cost seconds more than one, not minutes.
 
 The text before the `-` is only for your logs; treat the whole tag as an opaque name. Tags can change: if the server's clearnet endpoint refuses a request with `403 tor_required` (the exit relay is too new to be on the Tor Project's exit list yet), the SDK retries it up to twice, each time under a new tag of the same kind, and keeps using the tag that worked. So a new tag always means "a new circuit, please". With a Tor SOCKS proxy, the simplest correct implementation uses the tag as the SOCKS username: Tor puts streams with different usernames on different circuits (`IsolateSOCKSAuth`, on by default). The Kotlin sample's [`SocksTransport.kt`](../sdk/examples/kotlin-jvm/src/main/kotlin/com/btcmedusa/sample/SocksTransport.kt) does exactly that.
 

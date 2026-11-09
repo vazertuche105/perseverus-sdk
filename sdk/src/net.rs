@@ -6,11 +6,13 @@
 //!
 //! | tag            | used for                                           | lifetime              |
 //! |----------------|----------------------------------------------------|-----------------------|
-//! | `query-…`      | `/v1/meta`, filter downloads, the codebook         | one per `Perseverus`  |
+//! | `query-…`      | `/v1/meta`, the codebook (same for everyone)       | one per `Perseverus`  |
+//! | `filters-…`    | one coin's filter request (real block + decoys)    | one per block         |
+//! | `revocation-…` | the public revocation list before spending        | one per analysis      |
 //! | `purchase-…`   | `buy_tokens` and that purchase's `purchase_status` | one per purchase      |
 //! | `issuance-…`   | `redeem`                                           | one per redeem        |
 //! | `board-…`      | each card pack's board publish                     | one per publish       |
-//! | `spend-…`      | the token spends of one `analyze_inputs`           | one per analysis      |
+//! | `spend-…`      | one token's spend                                  | one per coin          |
 //!
 //! Requests with different tags must leave Tor through different circuits;
 //! otherwise the server could see one exit address both downloading filters
@@ -121,7 +123,7 @@ impl ExternalTransport for Adapter {
 
 /// Which circuit a request goes over.
 pub(crate) enum Circuit<'a> {
-    /// The shared query circuit (meta, filters, codebook).
+    /// The shared query circuit (meta, codebook).
     Query,
     /// A fresh circuit just for this activity ("issuance", "spend", …).
     Fresh(&'static str),

@@ -168,7 +168,9 @@ pub struct SpendClient {
     base_url: String,
     http: crate::net::Http,
     poseidon: PoseidonConfig<PoseidonField>,
-    pk: ProvingKey<Bn254>,
+    /// Shared: clones of a SpendClient (one per spend circuit) don't copy
+    /// the several-MB key.
+    pk: std::sync::Arc<ProvingKey<Bn254>>,
     server_pubkey_g1: G1Projective,
     /// "" for the legacy routes (Sparrow), "/v1" for the versioned API.
     api_prefix: &'static str,
@@ -194,7 +196,7 @@ impl SpendClient {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             http: crate::net::Http::builtin_default(Duration::from_secs(60)),
             poseidon: perseverus_core::poseidon::poseidon_config(),
-            pk,
+            pk: std::sync::Arc::new(pk),
             server_pubkey_g1,
             api_prefix: "",
         }
@@ -316,7 +318,7 @@ impl SpendClient {
             base_url,
             http,
             poseidon: perseverus_core::poseidon::poseidon_config(),
-            pk,
+            pk: std::sync::Arc::new(pk),
             server_pubkey_g1,
             api_prefix: "",
         })
@@ -337,7 +339,7 @@ impl SpendClient {
             base_url,
             http,
             poseidon: perseverus_core::poseidon::poseidon_config(),
-            pk,
+            pk: std::sync::Arc::new(pk),
             server_pubkey_g1,
             api_prefix: "",
         })
@@ -358,7 +360,7 @@ impl SpendClient {
             base_url,
             http,
             poseidon: perseverus_core::poseidon::poseidon_config(),
-            pk,
+            pk: std::sync::Arc::new(pk),
             server_pubkey_g1,
             api_prefix: "",
         })

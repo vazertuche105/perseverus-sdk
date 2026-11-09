@@ -24,7 +24,7 @@ Production is a Tor onion service, and the SDK needs a **SOCKS5 proxy** to reach
 
 Use the `socks5h://` scheme so hostnames, including the `.onion`, are resolved inside Tor. The SDK fails closed: if the proxy isn't up, calls throw `Network` and never fall back to clearnet. Start Medusa features only once your Tor layer reports it's ready.
 
-The SDK asks Tor for **separate circuits** for filter downloads, purchases, token spends and redemptions, using a different SOCKS username for each. This needs no setup, but it relies on Tor's default `IsolateSOCKSAuth` behaviour, so don't turn that off in an embedded Tor config.
+The SDK asks Tor for **separate circuits** for every coin's filter download and every coin's spend, and for purchases and redemptions, using a different SOCKS username for each. This needs no setup, but it relies on Tor's default `IsolateSOCKSAuth` behaviour, so don't turn that off in an embedded Tor config.
 
 ### Your own Tor client (`Transport.Custom`)
 
@@ -126,7 +126,7 @@ viewModelScope.launch {
 Typical durations over Tor:
 - `connect`, `tokenBalance`, `purchaseStatus`: about 1 s.
 - `redeem`: 1–3 s for a 100-token pack, longer for a yearly plan (1,300 tokens).
-- `analyzeInputs`: 3–20 s in our tests against production. Most of it is Tor: building the call's two fresh circuits and downloading the filters (about 50 KB for one coin with 8 decoys). Proving adds 0.5–1.5 s per matched funding transaction. Run it while the user reviews the transaction, not after they tap Send.
+- `analyzeInputs`: 3–20 s in our tests against production. Most of it is Tor: building fresh circuits (two per coin, built in parallel) and downloading the filters (about 50 KB per coin with 8 decoys). Each request also waits a random 0–1 s first, so a wallet's coins don't arrive at the server as one burst. Proving adds 0.5–1.5 s per matched funding transaction. More coins add mostly proving time: 20 coins take roughly 20–40 s, not 20 times one coin. Pass all of a transaction's inputs in one call (the SDK splits them by coin itself). Run it while the user reviews the transaction, not after they tap Send.
 
 Calls can't be cancelled mid-flight. If the user leaves the screen, let the call finish in the background and ignore the result. Don't abandon a `redeem`.
 

@@ -13,7 +13,7 @@ Responses on this page come from the server's own test suite, which records real
 | Auth | None. Tokens and purchase ids are the only credentials, and they travel in request bodies. |
 | Idempotency | `Idempotency-Key` header (1–128 chars) on `tokens/purchase`, `tokens/redeem` and `analyze/batch`. The same key and body within 24 h replays the stored response with header `Idempotent-Replayed: true`. The same key with a different body is refused with `422 idempotency_key_reused`. 5xx responses aren't stored. Keys are held in memory, so a server restart forgets them. |
 | Caching | `codebook`, `circuit/pk` and `circuit/vk` send `ETag`. Send `If-None-Match` to get `304`. |
-| Privacy rule | **No endpoint takes a txid, outpoint or address, and none ever will.** `filters/batch` and `analyze/batch` must go over different Tor circuits, and the analyze request carries no heights. Purchases (`tokens/purchase` and its `status` polls) go over their own circuit too. |
+| Privacy rule | **No endpoint takes a txid, outpoint or address, and none ever will.** `filters/batch` and `analyze/batch` must go over different Tor circuits, and the analyze request carries no heights. Send **one coin per request**: one real height with its decoys per `filters/batch`, one spend per `analyze/batch`, each on its own circuit. The batch limits exist, but a request with several coins' heights lets the server recognise the transaction once it's broadcast. Purchases (`tokens/purchase` and its `status` polls) go over their own circuit too. |
 
 ## The error envelope
 
@@ -327,7 +327,7 @@ Each key is `Poseidon(pack_id)` as a compressed field element. To use it, rebuil
 
 - `blinded_point` is the funding txid hashed to the curve and multiplied by a secret random factor, so the server can't recover the txid.
 - `spend` is a Groth16 proof (public inputs: `nullifier`, `current_month`, `revocation_root`). It proves that the client holds an unspent, unrevoked token signed by this server, without revealing which one. The server requires `current_month` to equal its own month, and the token's validity window, signed by the server at issuance, is checked inside the proof.
-- The request contains **no heights, txids or outpoints**, and must go over a different Tor circuit from `filters/batch`.
+- The request contains **no heights, txids or outpoints**, and must go over a different Tor circuit from `filters/batch`. The SDK sends one spend per request, each on its own circuit, so the server never sees which spends belong together.
 
 **`200` response** (illustrative). There is one entry per request, in order, and each succeeds or fails independently:
 

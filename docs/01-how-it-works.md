@@ -58,8 +58,8 @@ Packs are valid for a window of months (a single pack: this month and next). The
 
 Even with all of the above, timing and IP addresses could link requests. So:
 - Everything goes over **Tor**.
-- The filter download and the token spend use **separate Tor circuits**, and the spend request carries **no block heights**. The server can't connect "this set of heights" to "this spend".
-- Redeeming a purchase uses its own circuit too.
+- **Each coin travels alone.** Every coin's filter download and every coin's token spend use their own fresh Tor circuit, and the spend request carries **no block heights**. The server can't connect "this set of heights" to "this spend", or one coin to another. (If a transaction's coins went together, the server could later recognise the broadcast transaction as the one whose inputs all come from blocks in that set.)
+- Buying and redeeming use their own circuits too.
 
 ## The whole flow
 
@@ -76,10 +76,11 @@ sequenceDiagram
     Note over W,S: Card packs only, for chargebacks
     W->>S: POST /v1/board/publish {pack_id, tag, one-time ticket}  (own Tor circuit)
     Note over W,S: Each time the user is about to send
-    W->>S: POST /v1/filters/batch {real + decoy heights, shuffled}  (circuit A)
+    Note over W,S: For each coin, in parallel, after a random delay
+    W->>S: POST /v1/filters/batch {1 real + 8 decoy heights, shuffled}  (own circuit)
     S-->>W: encrypted filters
     Note over W: match locally: found / ungraded / not covered
-    W->>S: POST /v1/analyze/batch {blinded txid point + ZK token proof}  (circuit B, no heights)
+    W->>S: POST /v1/analyze/batch {blinded txid point + ZK token proof}  (another own circuit, no heights)
     S-->>W: evaluated point + DLEQ proof
     Note over W: verify, unblind, decrypt tag, build PrivacyReport
 ```

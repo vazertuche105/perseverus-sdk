@@ -460,8 +460,13 @@ impl Perseverus {
     pub fn analyze_inputs(&self, inputs: Vec<InputRef>, options: AnalyzeOptions) -> Result<AnalysisResult, PerseverusError> {
         analyze::validate_options(&options)?; // before any network use
         let month = self.current_month()?;
-        let make_spend = || self.spend_client();
-        let ctx = analyze::Ctx { query: &self.query, spend: &make_spend, store: &self.store, current_month: month };
+        // Each coin's filter request and spend get their own fresh circuit;
+        // the shared query circuit only fetches the codebook.
+        let make_filters = || -> Result<QueryClient, PerseverusError> {
+            Ok(QueryClient::new(&self.base_url).with_v1().with_http(self.net.http(Circuit::Fresh("filters"))?))
+        };
+        let make_spend = |purpose: &'static str| self.spend_client(purpose);
+        let ctx = analyze::Ctx { query: &self.query, filters: &make_filters, spend: &make_spend, store: &self.store, current_month: month };
         analyze::analyze(&ctx, inputs, &options)
     }
 }
@@ -508,7 +513,8 @@ impl Perseverus {
 
     /// Spend client with the proving key cached on disk, using a fresh
     /// isolated circuit for every analysis.
-    fn spend_client(&self) -> Result<SpendClient, PerseverusError> {
+    /// The spend client on a fresh circuit tagged `purpose`.
+    fn spend_client(&self, purpose: &'static str) -> Result<SpendClient, PerseverusError> {
         let mut guard = self.spend.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             let sc = match &self.proving_key_path {
@@ -528,7 +534,7 @@ impl Perseverus {
             };
             *guard = Some(sc);
         }
-        Ok(guard.as_ref().unwrap().clone().with_http(self.net.http(Circuit::Fresh("spend"))?))
+        Ok(guard.as_ref().unwrap().clone().with_http(self.net.http(Circuit::Fresh(purpose))?))
     }
 }
 

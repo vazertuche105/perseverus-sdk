@@ -37,8 +37,8 @@ info:
 servers:
   - url: http://medusayl5rrmgnekpabcduw7onhvdowmfart2mulq3b64chgzng52had.onion
     description: Production (Tor hidden service). Route over Tor (socks5h).
-  - url: http://178.105.65.132:3030
-    description: Production over clearnet (development use; the server sees your IP).
+  - url: https://api.btcmedusa.com
+    description: Production over clearnet, for Tor clients that can't reach onion services. Tor exit relays only (anything else gets 403 tor_required).
 
 tags:
   - name: meta

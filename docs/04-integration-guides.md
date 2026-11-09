@@ -64,7 +64,7 @@ val medusa = Perseverus.connect(Config(
 
 Before shipping, check that your transport really isolates circuits, with `checkTransport(endpoint, transport, 8u)` against the clearnet endpoint (see the [SDK reference](03-sdk-reference.md#checktransport-test-your-transports-circuit-isolation)). It's statistical: an occasional shared exit is normal, and the verdict accounts for it. The Kotlin sample runs it with `MEDUSA_TRANSPORT=custom ./gradlew run --args="check-transport"`.
 
-If your Tor client can't reach onion services, use a clearnet endpoint. It must be `https://`: the request leaves Tor at an exit relay, and HTTPS keeps that relay from reading it. `connect` refuses a clearnet `http://` endpoint. A clearnet HTTPS endpoint for the production server, which accepts connections from Tor exits only, is being set up; this guide will give its address once it's live.
+If your Tor client can't reach onion services, use a clearnet endpoint. It must be `https://`: the request leaves Tor at an exit relay, and HTTPS keeps that relay from reading it. `connect` refuses a clearnet `http://` endpoint. The production server's clearnet endpoint is **`https://api.btcmedusa.com`**. It accepts connections from Tor exit relays only: anything else gets `403 tor_required`, so a request that skipped Tor by mistake fails instead of reaching the server. If an exit relay is too new to be on the Tor Project's exit list yet, the SDK retries on a new circuit by itself.
 
 ### `pk.bin`
 

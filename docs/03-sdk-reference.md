@@ -304,6 +304,7 @@ fun analyzeInputs(inputs: List<InputRef>, options: AnalyzeOptions): AnalysisResu
 | Field | Meaning |
 |---|---|
 | `reports` | One `PrivacyReport` per input, **in the same order** as `inputs`. |
+| `transaction` | A `TransactionAssessment`: the inputs judged **together**. Is it a problem to spend them in one transaction, and which should come out? Worked out on the device from `reports`, so it's free. See [`assessTransaction`](#assesstransaction). |
 | `tokensSpent` | Tokens consumed by this call. This is the authoritative count, including tokens lost to a failed request. |
 | `filtersDownloaded`, `bytesDownloaded` | Bandwidth used. Each filter is roughly tens to hundreds of KB. |
 
@@ -336,6 +337,41 @@ val worst = result.reports.filter { it.status == ReportStatus.GRADED }.minByOrNu
 **What the server sees.** For each coin, on its own circuit, a shuffled set of block heights (one real, the rest decoys), and on yet another circuit, one blinded point with a token proof. Never a txid, an outpoint, an address or a balance.
 
 **Why one coin at a time.** If all of a transaction's coins went in one request, the server could later recognise the broadcast transaction: decoys hide one coin's block well, but a stranger's transaction whose inputs *all* come from blocks in that one set practically never happens. A shared circuit would also let it group the coins a wallet checks in one session. Splitting by coin removes both. Pass all of a transaction's inputs in **one** `analyzeInputs` call anyway: the SDK splits them itself, and a single call lets it share the work (one codebook, one revocation list, coins in the same block share a filter request). The privacy model's [known limitations](07-privacy-model.md#known-limitations) cover what timing can still reveal.
+
+## `assessTransaction`
+
+```kotlin
+fun assessTransaction(reports: List<PrivacyReport>): TransactionAssessment
+fun transactionAssessmentJson(assessment: TransactionAssessment): String
+```
+
+**What.** Judges a set of inputs as one transaction. Each `PrivacyReport` describes one coin; this says what happens when the coins are spent **together**. Example: one input is clean (grade B) and three are poor (D, F, D). The verdict is `AVOID`, the top finding is "Mixes clean coins with badly exposed ones", and its `inputs` point at the clean coin, the one to send separately.
+
+**How.** It reads the reports and applies a fixed set of rules (listed in the [field guide](05-privacy-report.md#the-whole-transaction-transactionassessment)): flagged coins next to unflagged ones, CoinJoin outputs next to unmixed coins, clean coins next to low-grade ones, and so on. It's a plain function, not a method on `Perseverus`: it needs no connection.
+
+**No request, no token.** It runs entirely on the device. The server never sees any coin's result, and it must never learn which coins are being spent together, so this is deliberately not a server call. `analyzeInputs` is where tokens are spent (one per coin, once); assessing combinations of coins you've already analyzed is free, as often as you like.
+
+**When.**
+- You usually don't need to call it after `analyzeInputs`: the same assessment is already in `result.transaction`.
+- Call it when the selection changes: the user removes a coin on the review screen, or picks coins in coin control. Pass the reports of the coins now selected.
+- A coin with no report yet needs `analyzeInputs` first. Coins analyzed before come from the SDK's cache at no cost, so calling `analyzeInputs` again with the new selection also works; it just isn't instant.
+
+```kotlin
+val result = medusa.analyzeInputs(inputs, options)
+when (result.transaction.verdict) {
+    CombineVerdict.AVOID -> warnBeforeSending(result.transaction)
+    CombineVerdict.CAUTION -> showNote(result.transaction)
+    CombineVerdict.OK -> {}
+}
+
+// The user unticks the second coin:
+val selected = result.reports.filterIndexed { i, _ -> i != 1 }
+val updated = assessTransaction(selected)
+```
+
+**Returns.** A `TransactionAssessment`: `verdict`, `complete`, `primaryRecommendation`, `findings` (each naming the `inputs` it's about) and `groups` (which inputs are fine to spend with each other). Positions in `inputs` refer to the list you passed, starting at 0. Fields, every finding and the limits are in the [field guide](05-privacy-report.md#the-whole-transaction-transactionassessment).
+
+**Errors.** None. Reports without a grade are counted as unassessed and make `complete` false.
 
 ## `forgetCachedGrades`
 
@@ -434,6 +470,8 @@ fun checkTransport(endpoint: String, transport: PerseverusTransport, circuits: U
 | `ReportStatus` | enum | `GRADED`, `UNGRADED`, `NOT_COVERED`, `ERROR` |
 | `Severity` | enum | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`, `GOOD` |
 | `PrivacyReport`, `Finding`, `Recommendation`, `SeverityCounts`, `ReportError` | data classes | See the [PrivacyReport field guide](05-privacy-report.md). |
+| `TransactionAssessment`, `TransactionFinding`, `InputGroup` | data classes | The inputs judged together. See the [field guide](05-privacy-report.md#the-whole-transaction-transactionassessment). |
+| `CombineVerdict` | enum | `OK`, `CAUTION`, `AVOID` |
 
 Integers are Kotlin unsigned types (`UInt`, `ULong`, `UShort`) because the Rust side is unsigned. Use `8u`, `.toUInt()`, and so on.
 

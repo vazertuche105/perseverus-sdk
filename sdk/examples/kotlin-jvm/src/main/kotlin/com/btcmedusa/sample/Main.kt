@@ -39,6 +39,7 @@ import com.btcmedusa.perseverus.PrivacyReport
 import com.btcmedusa.perseverus.PurchaseState
 import com.btcmedusa.perseverus.ReportStatus
 import com.btcmedusa.perseverus.Transport
+import com.btcmedusa.perseverus.TransactionAssessment
 import com.btcmedusa.perseverus.TransportVerdict
 import com.btcmedusa.perseverus.checkTransport
 import com.google.gson.JsonParser
@@ -264,6 +265,26 @@ private fun analyze(medusa: Perseverus, args: List<String>) {
             "${result.filtersDownloaded} filters (${result.bytesDownloaded / 1024u} KB). Balance ${medusa.tokenBalance()}\n",
     )
     result.reports.forEach(::printReport)
+    printTransaction(result.transaction)
+}
+
+/** The inputs as one transaction: is it a problem to spend them together?
+ *  Worked out on the device from the reports; no request, no token. A wallet
+ *  can call assessTransaction(reports) again whenever the user adds or
+ *  removes a coin. */
+private fun printTransaction(t: TransactionAssessment) {
+    if (t.inputsTotal < 2u) return
+    println("ALL ${t.inputsTotal} INPUTS TOGETHER: ${t.verdict}" + if (t.complete) "" else "  (only ${t.inputsGraded} of ${t.inputsTotal} assessed)")
+    t.primaryRecommendation?.let { println("   [${it.urgency}] ${it.headline}\n      ${it.detail}") }
+    t.findings.forEach { f ->
+        val which = if (f.inputs.isEmpty()) "" else "  (input ${f.inputs.joinToString { "#${it + 1u}" }})"
+        println("   - ${f.severity.name.lowercase()}: ${f.title}$which")
+    }
+    if (t.groups.size > 1) {
+        println("   spend separately:")
+        t.groups.forEach { g -> println("      ${g.title}: ${g.inputs.joinToString { "#${it + 1u}" }}") }
+    }
+    println()
 }
 
 private fun printReport(r: PrivacyReport) {

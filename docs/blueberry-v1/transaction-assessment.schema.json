@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://btcmedusa.com/schemas/v1/transaction-assessment.schema.json",
+  "title": "TransactionAssessment",
+  "description": "The inputs of one transaction assessed TOGETHER: is it a problem to spend them in the same transaction? Returned by the Perseverus SDK as AnalysisResult.transaction and by assess_transaction(reports). Produced on the device from the per-input PrivacyReports: no request is sent, no token is spent, and the server never sees it. Field names are snake_case; the Kotlin bindings expose camelCase. Input positions are 0-based indexes into the list of reports that was assessed.",
+  "type": "object",
+  "required": ["schema_version", "verdict", "complete", "inputs_total", "inputs_graded", "funding_transactions", "findings", "groups"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "verdict": {
+      "description": "ok: none of the risky combinations fired. caution: a combination worth a second look (most severe finding is medium). avoid: combining these inputs does real damage (a high or critical finding); warn the user before they send.",
+      "enum": ["ok", "caution", "avoid"]
+    },
+    "complete": {
+      "description": "false when at least one input has no grade (ungraded, not covered, error), so the verdict covers only the others. Also false for an empty input list.",
+      "type": "boolean"
+    },
+    "inputs_total": { "type": "integer", "minimum": 0 },
+    "inputs_graded": { "type": "integer", "minimum": 0 },
+    "funding_transactions": {
+      "description": "Distinct earlier transactions the inputs come from. Inputs from the same one are already linked on-chain.",
+      "type": "integer", "minimum": 0
+    },
+    "best_grade": { "description": "Best display grade among the graded inputs. Absent when none is graded.", "enum": ["A+", "A", "B", "C", "D", "F"] },
+    "worst_grade": { "description": "Worst display grade among the graded inputs. Absent when none is graded.", "enum": ["A+", "A", "B", "C", "D", "F"] },
+    "primary_recommendation": {
+      "description": "The one thing to show first: the most severe finding, or the good news when there is no problem. Absent only for an empty input list.",
+      "type": "object",
+      "required": ["urgency", "headline", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "urgency": { "enum": ["immediate", "soon", "when-convenient", "positive", "neutral"] },
+        "headline": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    },
+    "findings": {
+      "description": "Most severe first. Ids and text come from transaction-findings.v1.json.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "severity", "description", "recommendation", "inputs"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "enum": ["mix-sanctioned-or-darknet", "mix-dust-attack", "mix-taint", "mix-coinjoin-with-other", "mix-grade-spread-severe", "mix-grade-spread", "mix-known-entity", "merge-coinjoin-outputs", "incomplete", "links-inputs", "consistent", "same-origin", "single-input", "none-assessed"]
+          },
+          "title": { "type": "string" },
+          "severity": { "enum": ["critical", "high", "medium", "low", "info", "good"] },
+          "description": { "type": "string" },
+          "recommendation": { "type": "string" },
+          "inputs": {
+            "description": "The inputs this finding is about. For a 'would link X to your other coins' finding these are the X: taking them out of the transaction clears the finding. Empty when the finding is about the set as a whole.",
+            "type": "array", "items": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "groups": {
+      "description": "The inputs sorted into groups that are fine to spend with each other by these rules. More than one group means the findings warn about spending inputs from different groups together.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "inputs"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "enum": ["exposed", "coinjoin", "known-entity", "clean", "lower-grade", "unassessed"] },
+          "title": { "type": "string" },
+          "inputs": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    }
+  }
+}

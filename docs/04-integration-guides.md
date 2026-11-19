@@ -209,6 +209,8 @@ medusa.io { it.addPurchase("card_3f9a…", Plan.YEARLY) }
 
 Run it on the transaction review screen, after the user has chosen inputs and before signing. Only the inputs are analysed: the report describes the history of each coin being spent.
 
+The result also judges the inputs **together**, in `result.transaction`. Check its `verdict` before letting the user send: `AVOID` means this particular combination does damage, for example one clean coin spent with three exposed ones, or a CoinJoin output spent with an unmixed coin. Its top finding names the inputs to take out. When the user changes the selection, call `assessTransaction(reportsOfSelectedCoins)` for an instant, free update. Both run on the device; see the [SDK reference](03-sdk-reference.md#assesstransaction).
+
 ### Building the inputs
 
 You need each input's **funding txid**, **vout** and **confirmation height**. Your wallet already has all three from its UTXO set; nothing is looked up externally.

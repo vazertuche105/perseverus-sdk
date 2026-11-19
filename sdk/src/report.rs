@@ -179,7 +179,7 @@ fn catalog() -> &'static Catalog {
     C.get_or_init(|| serde_json::from_str(CATALOG_JSON).expect("embedded findings catalog is valid"))
 }
 
-fn severity(s: &str) -> Severity {
+pub(crate) fn severity(s: &str) -> Severity {
     match s {
         "critical" => Severity::Critical,
         "high" => Severity::High,
@@ -198,6 +198,21 @@ fn decode(tag: u32) -> Fields {
         .iter()
         .map(|(k, &(off, w))| (k.clone(), (tag >> off) & ((1u32 << w) - 1)))
         .collect()
+}
+
+/// The decoded tag fields of a graded report (from its `raw_tag`), by name;
+/// `None` for a report that has no grade.
+pub(crate) fn tag_fields(report: &PrivacyReport) -> Option<Fields> {
+    if report.status != ReportStatus::Graded {
+        return None;
+    }
+    let hex = report.raw_tag.as_deref()?.strip_prefix("V3LEAN:")?;
+    u32::from_str_radix(hex, 16).ok().map(|tag| decode(tag & 0x00FF_FFFF))
+}
+
+/// The display grade ("B", "C", "D", "F") for a grade band 0..=3.
+pub(crate) fn display_grade(band: u32) -> String {
+    catalog().display_grade[&band.to_string()].clone()
 }
 
 /// Evaluate a catalog trigger. The grammar is deliberately tiny:

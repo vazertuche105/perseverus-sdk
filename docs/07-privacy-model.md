@@ -29,6 +29,10 @@ The SDK also enforces the two settings that could weaken this:
 
 One choice is still yours: **prefer Lightning over card** if you'd rather your identity weren't attached even to the purchase. A card payment tells Stripe and the server who bought tokens, though never what they checked.
 
+## The whole-transaction check stays on the device
+
+`assessTransaction` and `AnalysisResult.transaction` judge a set of inputs together ("don't spend this clean coin with those three"). They are computed on the device from reports the wallet already holds. Nothing is sent: the server never sees a coin's result, and never learns which coins a wallet is about to spend together. There is no server endpoint for this, and there won't be one.
+
 ## Who sees what
 
 | Party | Can learn | Cannot learn |

@@ -29,6 +29,7 @@ pub mod check;
 pub mod error;
 pub mod net;
 pub mod report;
+pub mod transaction;
 pub mod store;
 
 use std::path::PathBuf;
@@ -56,6 +57,7 @@ pub use net::{Header, PerseverusTransport, TransportError, TransportRequest, Tra
 pub use check::{check_transport, CircuitExits, TransportCheck, TransportVerdict};
 use net::{Circuit, Net};
 pub use report::{Finding, InputRef, PrivacyReport, Recommendation, ReportError, ReportStatus, Severity, SeverityCounts};
+pub use transaction::{assess_transaction, transaction_assessment_json, CombineVerdict, InputGroup, TransactionAssessment, TransactionFinding};
 pub use store::PackInfo;
 
 use store::{Store, StoredPurchase};

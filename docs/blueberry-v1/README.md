@@ -8,6 +8,8 @@ The machine-readable contract behind the SDK: the `/v1` OpenAPI spec, the `Priva
 | `check_responses.py` | Checks recorded server responses against `openapi.yaml`: `python3 check_responses.py openapi.yaml <dir>` (the server's `/v1` tests record them with `V1_EXAMPLES_DIR=<dir>`). |
 | `privacy-report.schema.json` | JSON Schema (2020-12) for the `PrivacyReport` the SDK returns per input. It mirrors `PrivacyReport.java` and adds `status`, `token_spent` and `include_in_wallet_average`. |
 | `findings-catalog.v3lean.json` | A data-only port of `V3LeanTag` + `V3LeanReportBuilder`: bit layout, enums, 22 finding templates with trigger rules, the primary-recommendation cascade and the synthetic scores. The Rust SDK should build reports from this file so Sparrow and Blueberry render the same text. |
+| `transaction-assessment.schema.json` | JSON Schema for the `TransactionAssessment` the SDK returns for a set of inputs judged together (`AnalysisResult.transaction`, `assess_transaction`). Produced on the device from the per-input reports. |
+| `transaction-findings.v1.json` | The text of the whole-transaction findings and input groups. The rules that decide when each fires are in `sdk/src/transaction.rs`. |
 | `catalog_ref.py` | A ~40-line reference decoder that uses only the catalog. Checked against the Java builder on 20,000 tags with 0 mismatches. |
 
 ## Where the handoff doc is out of date

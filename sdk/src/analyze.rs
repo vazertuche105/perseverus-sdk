@@ -68,6 +68,10 @@ pub struct AnalyzeOptions {
 pub struct AnalysisResult {
     /// One report per input, in the same order as the request.
     pub reports: Vec<PrivacyReport>,
+    /// The inputs assessed as one transaction: is it a problem to spend them
+    /// together? Worked out on the device from `reports` (see
+    /// [`crate::transaction`]); `inputs` positions refer to `reports`.
+    pub transaction: crate::transaction::TransactionAssessment,
     /// Tokens consumed by this call (one per matched funding transaction).
     pub tokens_spent: u32,
     /// Filters downloaded (real + decoy).
@@ -169,7 +173,13 @@ pub(crate) fn validate_options(opts: &AnalyzeOptions) -> Result<(), PerseverusEr
 pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -> Result<AnalysisResult, PerseverusError> {
     validate_options(opts)?;
     if inputs.is_empty() {
-        return Ok(AnalysisResult { reports: vec![], tokens_spent: 0, filters_downloaded: 0, bytes_downloaded: 0 });
+        return Ok(AnalysisResult {
+            reports: vec![],
+            transaction: crate::transaction::assess(&[]),
+            tokens_spent: 0,
+            filters_downloaded: 0,
+            bytes_downloaded: 0,
+        });
     }
 
     // ── 1. Group inputs by funding tx (v5 filters are keyed per transaction) ──
@@ -360,7 +370,7 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
     }
 
     // ── 5. Reports, in input order ──
-    let reports = inputs
+    let reports: Vec<PrivacyReport> = inputs
         .into_iter()
         .zip(input_funding)
         .map(|(inp, fi)| match &outcomes[fi] {
@@ -373,7 +383,8 @@ pub(crate) fn analyze(ctx: &Ctx, inputs: Vec<InputRef>, opts: &AnalyzeOptions) -
         })
         .collect();
 
-    Ok(AnalysisResult { reports, tokens_spent, filters_downloaded, bytes_downloaded: bytes })
+    let transaction = crate::transaction::assess(&reports);
+    Ok(AnalysisResult { reports, transaction, tokens_spent, filters_downloaded, bytes_downloaded: bytes })
 }
 
 #[cfg(test)]

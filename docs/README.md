@@ -12,7 +12,7 @@ You integrate through the **`perseverus-sdk`** library: Rust, with Kotlin bindin
 | 2 | [Quickstart](02-quickstart.md) | Build the SDK, connect to the production server, and analyse a real coin from a small Kotlin program. |
 | 3 | [SDK reference](03-sdk-reference.md) | Every function and type: what it does, why it exists, when to call it, examples, errors, and what the server sees. |
 | 4 | [Integration guides](04-integration-guides.md) | Complete flows: buying tokens (Lightning, card, yearly), the pre-broadcast check, threading, backups, error handling. |
-| 5 | [PrivacyReport field guide](05-privacy-report.md) | Every grade, status, finding and recommendation, and how to show them to users. |
+| 5 | [PrivacyReport field guide](05-privacy-report.md) | Every grade, status, finding and recommendation, and how to show them to users. Also the whole-transaction assessment: whether a set of inputs should be spent together. |
 | 6 | [HTTP API reference (`/v1`)](06-http-api.md) | The server endpoints the SDK calls, with real requests and responses. Needed only if you write your own client or debug traffic. |
 | 7 | [Privacy and threat model](07-privacy-model.md) | What the server, the network and the payment processors can and cannot learn, and the rules that keep it that way. |
 | 8 | [Building for Android, iOS and desktop](08-building.md) | Compiling the native library and bindings into your app. |

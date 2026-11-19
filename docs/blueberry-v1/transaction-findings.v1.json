@@ -1,0 +1,112 @@
+{
+  "catalog_version": 1,
+  "about": "Text for the whole-transaction assessment (sdk/src/transaction.rs). The rules that decide WHEN a finding fires are in that file; this file holds what the user reads. Placeholders: {n} = inputs the finding is about, {total} = all inputs, {m} = distinct funding transactions, {best}/{worst} = display grades.",
+  "findings": [
+    {
+      "id": "mix-sanctioned-or-darknet",
+      "severity": "critical",
+      "title": "Would link your other coins to a sanctioned or darknet-linked source",
+      "description": "{n} of these {total} inputs came from a transaction tied to a sanctioned or darknet-market entity. One transaction that spends them together with your other coins shows that all of them share an owner, so chain analysis will treat every coin here as connected to that source.",
+      "recommendation": "Take the flagged input(s) out of this transaction and keep them apart from the rest of your wallet."
+    },
+    {
+      "id": "mix-dust-attack",
+      "severity": "critical",
+      "title": "Dust would link your other coins",
+      "description": "{n} of these {total} inputs show a dust pattern. A dust attack sends tiny amounts to many addresses and waits for the wallet to spend them alongside its real coins, which reveals that those coins share an owner.",
+      "recommendation": "Leave the dust input(s) out of this transaction. If your wallet can freeze coins, freeze them so they're never spent by accident."
+    },
+    {
+      "id": "mix-taint",
+      "severity": "critical",
+      "title": "Would spread chain taint to your other coins",
+      "description": "{n} of these {total} inputs carry taint signals in their history. Spent together with your other coins, that history attaches to all of them.",
+      "recommendation": "Spend the flagged input(s) in a separate transaction from the others."
+    },
+    {
+      "id": "mix-coinjoin-with-other",
+      "severity": "high",
+      "title": "Would undo a CoinJoin",
+      "description": "{n} of these {total} inputs came out of a CoinJoin and the rest didn't. Spending them together links the mixed coin(s) back to your unmixed history, which is what the CoinJoin was hiding.",
+      "recommendation": "Spend CoinJoin outputs on their own, never together with unmixed coins."
+    },
+    {
+      "id": "mix-grade-spread-severe",
+      "severity": "high",
+      "title": "Mixes clean coins with badly exposed ones",
+      "description": "These inputs have very different privacy grades: the best is {best}, the worst is {worst}. One transaction ties them together, so the cleaner coin(s) take on the history of the exposed one(s).",
+      "recommendation": "Spend the cleaner coin(s) in a separate transaction from the lower-graded ones."
+    },
+    {
+      "id": "mix-grade-spread",
+      "severity": "medium",
+      "title": "Mixes clean coins with exposed ones",
+      "description": "These inputs have different privacy grades: the best is {best}, the worst is {worst}. One transaction ties them together, so the cleaner coin(s) take on the history of the exposed one(s).",
+      "recommendation": "Spend the cleaner coin(s) in a separate transaction from the lower-graded ones."
+    },
+    {
+      "id": "mix-known-entity",
+      "severity": "medium",
+      "title": "Would link coins from a known entity to your other coins",
+      "description": "{n} of these {total} inputs came from a transaction involving a known entity, such as an exchange, which may know who you are. Spending them with your other coins lets that entity, and anyone it shares data with, connect those other coins to you too.",
+      "recommendation": "Keep coins from exchanges and other known entities separate from the rest."
+    },
+    {
+      "id": "merge-coinjoin-outputs",
+      "severity": "medium",
+      "title": "Merges several CoinJoin outputs",
+      "description": "{n} of these inputs came out of CoinJoins. Spending several mixed outputs in one transaction shows they share an owner and shrinks the anonymity each of them had.",
+      "recommendation": "Where you can, spend one CoinJoin output per transaction."
+    },
+    {
+      "id": "incomplete",
+      "severity": "low",
+      "title": "Not every input could be assessed",
+      "description": "{n} of these {total} inputs have no grade (not covered, ungraded, or the check failed), so this assessment only covers the others.",
+      "recommendation": "Treat an unassessed input as unknown. If in doubt, spend it separately."
+    },
+    {
+      "id": "links-inputs",
+      "severity": "info",
+      "title": "Links {total} coins on-chain",
+      "description": "Any transaction with several inputs shows that they share an owner. These {total} inputs come from {m} different earlier transactions, so sending them together links those histories for good.",
+      "recommendation": "That's fine when the coins already have similar histories. Use fewer inputs when you can."
+    },
+    {
+      "id": "consistent",
+      "severity": "good",
+      "title": "Inputs have similar privacy profiles",
+      "description": "None of the checks for risky combinations fired. Spending these inputs together adds no exposure beyond what each coin's own report already shows.",
+      "recommendation": "Nothing to change about the combination. Each coin's own report still applies."
+    },
+    {
+      "id": "same-origin",
+      "severity": "good",
+      "title": "Inputs already share a history",
+      "description": "All inputs come from the same earlier transaction, so spending them together reveals nothing new.",
+      "recommendation": "Nothing to change about the combination. Each coin's own report still applies."
+    },
+    {
+      "id": "single-input",
+      "severity": "good",
+      "title": "Single input",
+      "description": "Only one coin is being spent, so this transaction links nothing together.",
+      "recommendation": "Nothing to combine. The coin's own report still applies."
+    },
+    {
+      "id": "none-assessed",
+      "severity": "info",
+      "title": "No input could be assessed",
+      "description": "None of these {total} inputs has a grade, so there is nothing to compare.",
+      "recommendation": "Analyze the inputs first, or treat them as unknown."
+    }
+  ],
+  "groups": [
+    { "id": "exposed", "title": "Flagged: sanctioned or darknet link, chain taint, or dust" },
+    { "id": "coinjoin", "title": "CoinJoin outputs" },
+    { "id": "known-entity", "title": "From a known entity (e.g. an exchange)" },
+    { "id": "clean", "title": "Clean (grade B or C)" },
+    { "id": "lower-grade", "title": "Lower grade (D or F)" },
+    { "id": "unassessed", "title": "Not assessed" }
+  ]
+}

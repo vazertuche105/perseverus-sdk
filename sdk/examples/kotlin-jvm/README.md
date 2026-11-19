@@ -15,7 +15,7 @@ The first run builds the Rust library in release mode, generates the Kotlin bind
 | `import-sparrow` | Copies the Medusa wallet's token packs, from `~/.sparrow/perseverus-config`, so you can try analysis without paying. Tokens you spend here are invisible to Sparrow; if Sparrow later picks one, the server rejects it as already spent. |
 | `buy-trial` | Shows a real Lightning invoice (about $0.25, 1 token) as a QR code to scan with your phone's wallet, waits for payment, then claims the token. The same QR is saved as `invoice.png` in the data directory, for terminals that can't draw it. |
 | `buy-dev` | Same, for a 100-token pack at a few cents. Only test servers sell this plan |
-| `analyze <txid>:<vout>:<height> …` | Pre-broadcast analysis. Options: `--decoys N` (default 8, minimum 4) and `--tip HEIGHT` (by default it asks mempool.space's onion over Tor) |
+| `analyze <txid>:<vout>:<height> …` | Pre-broadcast analysis. With two or more inputs it also prints the whole-transaction assessment: whether these coins should be spent together, and which to send separately. Options: `--decoys N` (default 8, minimum 4) and `--tip HEIGHT` (by default it asks mempool.space's onion over Tor) |
 | `check-transport [N]` | With `MEDUSA_TRANSPORT=custom` and the server's clearnet `https://` address in `MEDUSA_ENDPOINT`: checks that the Kotlin transport sends different circuit tags over different Tor circuits (N tags, default 8). Prints the exit relay each request arrived from and a verdict. The check is statistical: one shared exit now and then is normal. |
 
 The `txid` is the funding transaction in normal explorer order, and `height` is the block it confirmed in. Sparrow's UTXOs tab shows both.

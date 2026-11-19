@@ -142,10 +142,126 @@ The graded report for the quickstart coin (in snake_case, as in the schema; the 
 }
 ```
 
+## The whole transaction: `TransactionAssessment`
+
+A `PrivacyReport` describes one coin. But a transaction that spends several coins also shows the world that they share an owner, so a clean coin spent next to an exposed one takes on its history. `TransactionAssessment` answers the question a per-coin report can't: **is it a problem to spend these inputs together, and if so, which ones should come out?**
+
+You get it two ways, and both give the same result:
+
+- `analyzeInputs(...)` returns it as `result.transaction`, for exactly the inputs you passed.
+- `assessTransaction(reports)` works it out from any list of reports you already hold. Call it again whenever the user adds or removes a coin on the review screen: it answers instantly.
+
+**It runs on the device.** It only reads reports the wallet already has, so it sends no request and costs no token. That's deliberate, and it's why there is no server endpoint for it: the server never learns any coin's result, and it must never learn which coins are about to be spent together.
+
+**Example.** A user builds a transaction from four coins. Coin #1 is grade B; coins #2–#4 are D, F and D:
+
+```kotlin
+val result = medusa.analyzeInputs(inputs, options)     // 4 tokens, as before
+val tx = result.transaction                            // free
+if (tx.verdict == CombineVerdict.AVOID) {
+    showWarning(tx.primaryRecommendation!!.headline,    // "Mixes clean coins with badly exposed ones"
+                tx.primaryRecommendation!!.detail)      // "Spend the cleaner coin(s) in a separate transaction…"
+    highlight(tx.findings.first().inputs)               // [0] → coin #1 is the one to take out
+}
+
+// The user removes coin #1. No new request, no token:
+val again = assessTransaction(result.reports.drop(1))   // verdict OK
+```
+
+### Fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verdict` | `CombineVerdict` | `OK`: none of the risky combinations fired. `CAUTION`: worth a second look (most severe finding is medium). `AVOID`: combining these inputs does real damage (a high or critical finding). **Warn before sending on `AVOID`.** |
+| `complete` | `Boolean` | `false` when some input has no grade (ungraded, not covered, or error), so the verdict covers only the others. |
+| `inputsTotal`, `inputsGraded` | `UInt` | How many inputs were looked at, and how many of them have a grade. |
+| `fundingTransactions` | `UInt` | Distinct earlier transactions the inputs come from. Inputs from the same one are already linked on-chain, so combining them reveals nothing new. |
+| `bestGrade`, `worstGrade` | `String?` | Best and worst grade among the graded inputs. |
+| `primaryRecommendation` | `Recommendation?` | The one thing to show first: the most severe finding, or the good news when there's no problem. `null` only for an empty list. |
+| `findings` | `List<TransactionFinding>` | Everything that fired, most severe first. Each has `id`, `title`, `severity`, `description`, `recommendation` and `inputs`. |
+| `groups` | `List<InputGroup>` | The inputs sorted into groups that are fine to spend with each other. More than one group means "spend these separately". |
+
+**Input positions.** `findings[].inputs` and `groups[].inputs` are positions in the list of reports that was assessed, starting at 0 (so `0` is the first input you passed). For a "would link X to your other coins" finding, `inputs` are the X: taking them out of the transaction clears the finding.
+
+### Findings
+
+A finding about mixing only fires when **some but not all** inputs have the property. If every input already has it, spending them together adds nothing new.
+
+| `id` | Severity | Fires when | `inputs` |
+|---|---|---|---|
+| `mix-sanctioned-or-darknet` | critical | Some inputs come from a transaction tied to a sanctioned or darknet-market entity, others don't. | The flagged inputs |
+| `mix-dust-attack` | critical | Some inputs show a dust-attack or dust-spending pattern. Spending dust next to real coins is what a dust attack waits for. | The dust inputs |
+| `mix-taint` | critical | Some inputs carry chain-taint signals, others don't. | The tainted inputs |
+| `mix-coinjoin-with-other` | high | Some inputs are CoinJoin outputs, others aren't. Spending them together undoes the CoinJoin. | The CoinJoin outputs |
+| `mix-grade-spread-severe` | high | Clean coins (grade B or C) are combined with lower-grade ones, and the worst is F. | The clean inputs |
+| `mix-grade-spread` | medium | Clean coins (B or C) are combined with grade-D ones. | The clean inputs |
+| `mix-known-entity` | medium | Some inputs come from a known entity such as an exchange, others don't. | The known-entity inputs |
+| `merge-coinjoin-outputs` | medium | Two or more CoinJoin outputs are spent together. | The CoinJoin outputs |
+| `incomplete` | low | Some inputs have no grade. | The unassessed inputs |
+| `links-inputs` | info | Always, when the inputs come from two or more earlier transactions: any multi-input transaction links its inputs. | (none) |
+| `consistent` | good | Two or more earlier transactions, every input graded, and nothing above fired. | (none) |
+| `same-origin` | good | All inputs come from the same earlier transaction. | (none) |
+| `single-input` | good | Only one input. | (none) |
+| `none-assessed` | info | No input has a grade. | All inputs |
+
+The grade-spread findings only compare coins that have no special flag. A flagged coin (sanctioned, tainted, dust, CoinJoin, known entity) is reported by its own finding, not twice.
+
+### Groups
+
+Each input lands in exactly one group. The first match wins:
+
+| `id` | Inputs in it |
+|---|---|
+| `exposed` | Sanctioned or darknet link, chain taint, or a dust pattern |
+| `coinjoin` | CoinJoin outputs |
+| `known-entity` | From a known entity such as an exchange |
+| `clean` | Grade B or C, no flag above |
+| `lower-grade` | Grade D or F, no flag above |
+| `unassessed` | No grade |
+
+Only groups with at least one input are returned. In the example above: `clean: [0]` and `lower-grade: [1, 2, 3]`.
+
+### Example JSON
+
+`transactionAssessmentJson(assessment)` gives the snake_case form ([schema](blueberry-v1/transaction-assessment.schema.json)). For the four-coin example:
+
+```json
+{
+  "schema_version": 1,
+  "verdict": "avoid",
+  "complete": true,
+  "inputs_total": 4,
+  "inputs_graded": 4,
+  "funding_transactions": 4,
+  "best_grade": "B",
+  "worst_grade": "F",
+  "primary_recommendation": { "urgency": "immediate", "headline": "Mixes clean coins with badly exposed ones",
+                              "detail": "Spend the cleaner coin(s) in a separate transaction from the lower-graded ones." },
+  "findings": [
+    { "id": "mix-grade-spread-severe", "severity": "high", "title": "Mixes clean coins with badly exposed ones",
+      "description": "These inputs have very different privacy grades: the best is B, the worst is F. One transaction ties them together, so the cleaner coin(s) take on the history of the exposed one(s).",
+      "recommendation": "Spend the cleaner coin(s) in a separate transaction from the lower-graded ones.", "inputs": [0] },
+    { "id": "links-inputs", "severity": "info", "title": "Links 4 coins on-chain", "...": "...", "inputs": [] }
+  ],
+  "groups": [
+    { "id": "clean", "title": "Clean (grade B or C)", "inputs": [0] },
+    { "id": "lower-grade", "title": "Lower grade (D or F)", "inputs": [1, 2, 3] }
+  ]
+}
+```
+
+### What it can't tell you
+
+- **It knows where each coin came from, not where this transaction is going.** A report describes the transaction that created the coin. The assessment doesn't see this transaction's outputs, amounts or change, so it can't judge those.
+- **`OK` means none of the known risky combinations fired, not that the transaction is private.** Every multi-input transaction still links its inputs (`links-inputs`).
+- **It's only as complete as the reports.** Check `complete`. An unassessed input is unknown, not clean.
+- **Storing reports.** To assess later without re-analyzing, keep the reports you got back. The assessment only reads each report's `status`, `input.txid` and `rawTag`.
+
 ## UI guidance
 
 - **Lead with the grade and `primaryRecommendation.headline`**, with `detail` and the findings one tap away.
 - **Explain, don't alarm.** The report describes the coin's past. Most findings can't be undone; the recommendations are about what to do *next*, such as not merging this coin with others or using a fresh wallet.
 - **Never call ungraded or not-covered coins risky**, and don't count them in averages (`includeInWalletAverage`).
-- **Several inputs:** show the worst graded input as the transaction's headline, and list the rest.
+- **Several inputs:** lead with the transaction's `verdict` and its `primaryRecommendation` ([above](#the-whole-transaction-transactionassessment)), then list each coin's own grade. On `AVOID`, warn before the user can send, and mark the inputs named in the top finding. On `CAUTION`, show the note without blocking. Offer the fix the `groups` suggest: "send coin #1 separately".
+- **Re-assess as the selection changes.** When the user adds or removes a coin, call `assessTransaction` with the reports of the coins now selected. It's instant and free. Only coins without a report yet need `analyzeInputs`.
 - **Accessibility:** don't rely on colour alone; always show the letter and the text.
